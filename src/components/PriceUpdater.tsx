@@ -7,6 +7,7 @@ import { readData, createBin } from "@/lib/jsonbin";
 import { setItem } from "@/lib/db";
 import type {
   StockHolding,
+  OptionHolding,
   TradeRecord,
   TradePlan,
   JournalEntry,
@@ -17,7 +18,7 @@ import type {
 const LAST_UPDATE_KEY = "lastPriceUpdateDate";
 
 export default function PriceUpdater() {
-  const { holdings, updatePrices, initialize, loaded, tradeRecords, dailyReturns, takeSnapshot } = useStore();
+  const { stockHoldings, updateStockPrices, initialize, loaded, tradeRecords, dailyReturns, takeSnapshot } = useStore();
   const [updating, setUpdating] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const priceFetched = useRef(false);
@@ -29,14 +30,14 @@ export default function PriceUpdater() {
   }, []);
 
   const updateAllPrices = useCallback(async () => {
-    if (holdings.length === 0 || updating) return;
+    if (stockHoldings.length === 0 || updating) return;
 
     setUpdating(true);
     setStatus("正在更新价格...");
 
     const updates: { id: string; nowPrice: number }[] = [];
 
-    for (const h of holdings) {
+    for (const h of stockHoldings) {
       const quote = await fetchQuote(h.id);
       if (quote && quote.price > 0) {
         updates.push({ id: h.id, nowPrice: quote.price });
@@ -44,7 +45,7 @@ export default function PriceUpdater() {
     }
 
     if (updates.length > 0) {
-      updatePrices(updates);
+      updateStockPrices(updates);
       localStorage.setItem(LAST_UPDATE_KEY, new Date().toLocaleDateString("en-CA"));
       setStatus(`已更新 ${updates.length} 只股票价格`);
     } else {
@@ -53,7 +54,7 @@ export default function PriceUpdater() {
 
     setUpdating(false);
     setTimeout(() => setStatus(null), 3000);
-  }, [holdings, updating, updatePrices]);
+  }, [stockHoldings, updating, updateStockPrices]);
 
   // 加载后：补充未初始化的价格 + 确保有当日快照
   useEffect(() => {
@@ -61,7 +62,7 @@ export default function PriceUpdater() {
     priceFetched.current = true;
 
     const initPrices = async () => {
-      const uninitialized = holdings.filter((h) => h.nowPrice === h.price);
+      const uninitialized = stockHoldings.filter((h) => h.nowPrice === h.price);
       if (uninitialized.length > 0) {
         setStatus("正在获取最新价格...");
         const updates: { id: string; nowPrice: number }[] = [];
@@ -72,7 +73,7 @@ export default function PriceUpdater() {
           }
         }
         if (updates.length > 0) {
-          updatePrices(updates);
+          updateStockPrices(updates);
           setStatus(`已更新 ${updates.length} 只股票价格`);
           setTimeout(() => setStatus(null), 3000);
         } else {
@@ -81,7 +82,7 @@ export default function PriceUpdater() {
       }
 
       // 确保图表有数据点
-      if (holdings.length > 0 && dailyReturns.length === 0) {
+      if (stockHoldings.length > 0 && dailyReturns.length === 0) {
         takeSnapshot();
       }
     };
@@ -122,7 +123,8 @@ export default function PriceUpdater() {
           journalEntries: JournalEntry[];
           snapshots: PortfolioSnapshot[];
           dailyReturns: DailyPricePoint[];
-          holdings?: StockHolding[];
+          stockHoldings?: StockHolding[];
+          optionHoldings?: OptionHolding[];
           baseCash?: number;
           lastPriceUpdateDate?: string;
         }>();
@@ -133,7 +135,8 @@ export default function PriceUpdater() {
           if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
           if (remote.snapshots?.length) await setItem("snapshots", remote.snapshots);
           if (remote.dailyReturns?.length) await setItem("dailyReturns", remote.dailyReturns);
-          if (remote.holdings?.length) await setItem("holdings", remote.holdings);
+          if (remote.stockHoldings?.length) await setItem("stockHoldings", remote.stockHoldings);
+          if (remote.optionHoldings?.length) await setItem("optionHoldings", remote.optionHoldings);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
           if (remote.lastPriceUpdateDate) localStorage.setItem(LAST_UPDATE_KEY, remote.lastPriceUpdateDate);
         } else {
@@ -143,7 +146,8 @@ export default function PriceUpdater() {
             journalEntries: [],
             snapshots: [],
             dailyReturns: [],
-            holdings: [],
+            stockHoldings: [],
+            optionHoldings: [],
           });
           if (newBinId) {
             console.log("JSONBin 已创建，新 Bin ID:", newBinId);

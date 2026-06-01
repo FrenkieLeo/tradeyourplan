@@ -9,7 +9,7 @@ import TimelineSlider from "@/components/TimelineSlider";
 import PriceUpdater from "@/components/PriceUpdater";
 
 export default function Home() {
-  const { holdings, loaded, syncToJsonBin } = useStore();
+  const { stockHoldings, loaded, syncToJsonBin } = useStore();
 
   // 定期同步到 JSONBin
   useEffect(() => {
@@ -53,11 +53,11 @@ export default function Home() {
             <TimelineSlider />
             <TotalPortfolio />
 
-            {holdings.length > 0 && (
+            {stockHoldings.length > 0 && (
               <div>
                 <h2 className="mb-4 text-base font-semibold">个股持仓收益</h2>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {holdings.map((h) => (
+                  {stockHoldings.map((h) => (
                     <StockChart key={h.id} holding={h} />
                   ))}
                 </div>
