@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+:root {
+  --tv-bg: #131722;
+  --tv-bg-secondary: #1e222d;
+  --tv-bg-tertiary: #2a2e39;
+  --tv-border: #2a2e39;
+  --tv-text: #d1d4dc;
+  --tv-text-secondary: #787b86;
+  --tv-accent: #2962ff;
+  --tv-green: #089981;
+  --tv-red: #f23645;
+  --tv-yellow: #ff9800;
+}
+
+html {
+  background-color: var(--tv-bg);
+  color: var(--tv-text);
+}
+
+body {
+  background-color: var(--tv-bg);
+  color: var(--tv-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--tv-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--tv-bg-tertiary);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--tv-text-secondary);
+}
+
+/* Input styling */
+input,
+textarea,
+select {
+  background-color: var(--tv-bg-secondary);
+  border: 1px solid var(--tv-border);
+  color: var(--tv-text);
+  outline: none;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--tv-accent);
+}
+
+/* Table styling */
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--tv-text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+td {
+  border-top: 1px solid var(--tv-border);
+}
+
+/* Button base */
+button {
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
