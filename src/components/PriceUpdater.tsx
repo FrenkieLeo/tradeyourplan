@@ -148,6 +148,7 @@ export default function PriceUpdater() {
             snapshots: [],
             dailyReturns: [],
             holdings: [],
+            optionHoldings: [],
           });
           if (newBinId) {
             console.log("JSONBin 已创建，新 Bin ID:", newBinId);
