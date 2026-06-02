@@ -317,8 +317,24 @@ export const useStore = create<AppState>((set, get) => ({
     const records = [...get().tradeRecords, record];
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-    const holdings = calcRevenue(recalcHoldings(records));
-    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
+
+    const oldHoldings = get().holdings;
+    const rawHoldings = recalcHoldings(records);
+    const restored = rawHoldings.map((h) => {
+      const old = oldHoldings.find((o) => o.id === h.id);
+      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
+    });
+    const holdings = calcRevenue(restored);
+    console.log("[addTradeRecord] nowPrice restored:", rawHoldings.map((h) => ({ id: h.id, price: h.price, nowPrice: (oldHoldings.find((o) => o.id === h.id)?.nowPrice ?? h.price) })));
+
+    const oldOptionHoldings = get().optionHoldings;
+    const rawOptions = recalcOptionHoldings(records);
+    const restoredOptions = rawOptions.map((o) => {
+      const old = oldOptionHoldings.find((p) => p.id === o.id);
+      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
+    });
+    const optionHoldings = calcOptionRevenue(restoredOptions);
+
     set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
@@ -331,8 +347,23 @@ export const useStore = create<AppState>((set, get) => ({
     );
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-    const holdings = calcRevenue(recalcHoldings(records));
-    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
+
+    const oldHoldings = get().holdings;
+    const rawHoldings = recalcHoldings(records);
+    const restored = rawHoldings.map((h) => {
+      const old = oldHoldings.find((o) => o.id === h.id);
+      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
+    });
+    const holdings = calcRevenue(restored);
+
+    const oldOptionHoldings = get().optionHoldings;
+    const rawOptions = recalcOptionHoldings(records);
+    const restoredOptions = rawOptions.map((o) => {
+      const old = oldOptionHoldings.find((p) => p.id === o.id);
+      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
+    });
+    const optionHoldings = calcOptionRevenue(restoredOptions);
+
     set({
       tradeRecords: records,
       holdings,
@@ -350,8 +381,23 @@ export const useStore = create<AppState>((set, get) => ({
     );
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-    const holdings = calcRevenue(recalcHoldings(records));
-    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
+
+    const oldHoldings = get().holdings;
+    const rawHoldings = recalcHoldings(records);
+    const restored = rawHoldings.map((h) => {
+      const old = oldHoldings.find((o) => o.id === h.id);
+      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
+    });
+    const holdings = calcRevenue(restored);
+
+    const oldOptionHoldings = get().optionHoldings;
+    const rawOptions = recalcOptionHoldings(records);
+    const restoredOptions = rawOptions.map((o) => {
+      const old = oldOptionHoldings.find((p) => p.id === o.id);
+      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
+    });
+    const optionHoldings = calcOptionRevenue(restoredOptions);
+
     set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
