@@ -9,7 +9,7 @@ import CashModal from "./CashModal";
 export default function TotalPortfolio() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { holdings, cash, dailyReturns, activeSnapshotIndex, snapshots } = useStore();
+  const { holdings, optionHoldings, cash, dailyReturns, activeSnapshotIndex, snapshots } = useStore();
   const [modalOpen, setModalOpen] = useState(false);
   const [cashModalOpen, setCashModalOpen] = useState(false);
 
@@ -19,11 +19,12 @@ export default function TotalPortfolio() {
       : null;
 
   const displayHoldings = displayData ? displayData.holdings : holdings;
+  const displayOptionHoldings = displayData ? displayData.optionHoldings : optionHoldings;
   const displayCash = displayData ? displayData.cash : cash;
 
-  const totalValue = displayHoldings.reduce((s, h) => s + h.total, 0);
-  const totalCost = displayHoldings.reduce((s, h) => s + h.cost, 0);
-  const totalRevenue = displayHoldings.reduce((s, h) => s + h.revenue, 0);
+  const totalValue = displayHoldings.reduce((s, h) => s + h.total, 0) + displayOptionHoldings.reduce((s, o) => s + o.currentValue, 0);
+  const totalCost = displayHoldings.reduce((s, h) => s + h.cost, 0) + displayOptionHoldings.reduce((s, o) => s + o.totalCost, 0);
+  const totalRevenue = displayHoldings.reduce((s, h) => s + h.revenue, 0) + displayOptionHoldings.reduce((s, o) => s + o.revenue, 0);
   const totalReturn =
     totalCost > 0
       ? parseFloat(((totalRevenue / totalCost) * 100).toFixed(2))

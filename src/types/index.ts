@@ -10,13 +10,35 @@ export interface StockHolding {
   revenuePercentage: number;
 }
 
+export interface OptionHolding {
+  id: string;
+  underlyingSymbol: string;
+  name: string;
+  type: "CALL" | "PUT";
+  strikePrice: number;
+  expirationDate: string;
+  contracts: number;
+  averagePremium: number;
+  totalCost: number;
+  nowPremium: number;
+  currentValue: number;
+  revenue: number;
+  revenuePercentage: number;
+}
+
 export interface TradeRecord {
   id: string;
+  assetType?: "STOCK" | "OPTION";
   name: string;
   number: number;
   price: number;
   cost: number;
   tradeTime: number;
+  // Option-specific metadata
+  underlyingSymbol?: string;
+  optionType?: "CALL" | "PUT";
+  optionStrike?: number;
+  optionExpiration?: string;
 }
 
 export interface CashReserve {
@@ -27,6 +49,7 @@ export interface CashReserve {
 
 export interface JournalEntry {
   id: string;
+  targetType: "STOCK" | "OPTION";
   name: string;
   time: number;
   content: string;
@@ -36,6 +59,7 @@ export interface PortfolioSnapshot {
   timestamp: number;
   date: string;
   holdings: StockHolding[];
+  optionHoldings: OptionHolding[];
   cash: CashReserve;
   dailyReturn: number;
 }

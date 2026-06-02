@@ -3,23 +3,41 @@
 import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { fetchQuote } from "@/lib/alphavantage";
-import type { TradeRecord } from "@/types";
+import type { TradeRecord, StockHolding, OptionHolding } from "@/types";
 
 interface TradeModalProps {
   open: boolean;
   onClose: () => void;
 }
 
+type TabType = "STOCK" | "OPTION";
+
 export default function TradeModal({ open, onClose }: TradeModalProps) {
-  const { holdings, tradeRecords, cash, addTradeRecord, removeTradeRecord, updateTradeRecord, updatePrices } =
+  const { holdings, optionHoldings, tradeRecords, cash, addTradeRecord, removeTradeRecord, updateTradeRecord, updatePrices } =
     useStore();
 
+  const [tab, setTab] = useState<TabType>("STOCK");
+
+  // Stock form
   const [stockName, setStockName] = useState("");
   const [stockId, setStockId] = useState("");
   const [number, setNumber] = useState("");
   const [price, setPrice] = useState("");
   const [tradeTime, setTradeTime] = useState("");
+
+  // Option form
+  const [optionName, setOptionName] = useState("");
+  const [optionId, setOptionId] = useState("");
+  const [optionUnderlying, setOptionUnderlying] = useState("");
+  const [optionType, setOptionType] = useState<"CALL" | "PUT">("CALL");
+  const [optionStrike, setOptionStrike] = useState("");
+  const [optionExpiration, setOptionExpiration] = useState("");
+  const [optionContracts, setOptionContracts] = useState("");
+  const [optionPremium, setOptionPremium] = useState("");
+
   const [editingTime, setEditingTime] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 15;
 
@@ -31,27 +49,55 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
 
   useEffect(() => {
     if (!open) {
+      setTab("STOCK");
       setStockName("");
       setStockId("");
       setNumber("");
       setPrice("");
       setTradeTime("");
+      setOptionName("");
+      setOptionId("");
+      setOptionUnderlying("");
+      setOptionType("CALL");
+      setOptionStrike("");
+      setOptionExpiration("");
+      setOptionContracts("");
+      setOptionPremium("");
       setEditingTime(null);
+      setEditingId(null);
+      setErrorMsg(null);
       setPage(1);
     }
   }, [open]);
 
+  // 期权标签页自动填充当天交易日期
+  useEffect(() => {
+    if (tab === "OPTION" && !tradeTime && !editingTime) {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      setTradeTime(`${y}-${m}-${day}`);
+    }
+  }, [tab, tradeTime, editingTime]);
+
   if (!open) return null;
 
-  const handleSubmit = async () => {
+  const handleSubmitStock = async () => {
+    setErrorMsg(null);
     const num = parseFloat(number);
     const p = parseFloat(price);
     const time = parseInt(tradeTime.replace(/-/g, ""), 10);
-    if (!stockName || !stockId || !num || !p || !time) return;
+    if (!stockName) { setErrorMsg("请输入股票名称"); return; }
+    if (!stockId) { setErrorMsg("请输入股票代码"); return; }
+    if (!num) { setErrorMsg("请输入有效的交易数量"); return; }
+    if (!p || p <= 0) { setErrorMsg("请输入有效的成交价格"); return; }
+    if (!tradeTime) { setErrorMsg("请选择交易日期"); return; }
 
     const code = stockId.toUpperCase();
     const record: TradeRecord = {
       id: code,
+      assetType: "STOCK",
       name: stockName,
       number: num,
       price: p,
@@ -59,13 +105,12 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       tradeTime: time,
     };
 
-    if (editingTime !== null) {
-      updateTradeRecord(editingTime, record);
+    if (editingTime !== null && editingId !== null) {
+      updateTradeRecord(editingTime, editingId, record);
     } else {
       addTradeRecord(record);
     }
 
-    // 提交交易后立即拉取该股票前一日收盘价
     const quote = await fetchQuote(code);
     if (quote && quote.price > 0) {
       updatePrices([{ id: code, nowPrice: quote.price }]);
@@ -77,24 +122,99 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
     setPrice("");
     setTradeTime("");
     setEditingTime(null);
+    setEditingId(null);
+  };
+
+  const handleSubmitOption = async () => {
+    setErrorMsg(null);
+    const contracts = parseFloat(optionContracts);
+    const premium = parseFloat(optionPremium);
+    const strike = parseFloat(optionStrike);
+    const time = parseInt(tradeTime.replace(/-/g, ""), 10);
+    if (!optionName) { setErrorMsg("请输入期权名称"); return; }
+    if (!optionId) { setErrorMsg("请输入 OCC 代码"); return; }
+    if (!optionUnderlying) { setErrorMsg("请输入正股代码"); return; }
+    if (!strike || strike <= 0) { setErrorMsg("请输入有效的行权价"); return; }
+    if (!optionExpiration) { setErrorMsg("请选择到期日"); return; }
+    if (!contracts) { setErrorMsg("请输入有效的交易张数"); return; }
+    if (!premium || premium <= 0) { setErrorMsg("请输入有效的权利金"); return; }
+    if (!tradeTime) { setErrorMsg("请选择交易日期"); return; }
+
+    const code = optionId.toUpperCase();
+    const record: TradeRecord = {
+      id: code,
+      assetType: "OPTION",
+      name: optionName,
+      number: contracts,
+      price: premium,
+      cost: Math.abs(contracts) * premium * 100,
+      tradeTime: time,
+      underlyingSymbol: optionUnderlying.toUpperCase(),
+      optionType,
+      optionStrike: strike,
+      optionExpiration: optionExpiration,
+    };
+
+    if (editingTime !== null && editingId !== null) {
+      updateTradeRecord(editingTime, editingId, record);
+    } else {
+      addTradeRecord(record);
+    }
+
+    setOptionName("");
+    setOptionId("");
+    setOptionUnderlying("");
+    setOptionType("CALL");
+    setOptionStrike("");
+    setOptionExpiration("");
+    setOptionContracts("");
+    setOptionPremium("");
+    setEditingTime(null);
+    setEditingId(null);
+  };
+
+  const formatTradeTime = (t: number) => {
+    const s = String(t);
+    if (s.length > 8) {
+      return new Date(t).toLocaleDateString("en-CA");
+    }
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
   };
 
   const startEdit = (r: TradeRecord) => {
-    setStockName(r.name);
-    setStockId(r.id);
-    setNumber(String(r.number));
-    setPrice(String(r.price));
-    setTradeTime(String(r.tradeTime));
+    if (r.assetType === "OPTION") {
+      setTab("OPTION");
+      setOptionName(r.name);
+      setOptionId(r.id);
+      setOptionUnderlying(r.underlyingSymbol ?? "");
+      setOptionType(r.optionType ?? "CALL");
+      setOptionStrike(String(r.optionStrike ?? ""));
+      setOptionExpiration(r.optionExpiration ?? "");
+      setOptionContracts(String(r.number));
+      setOptionPremium(String(r.price));
+      setTradeTime(formatTradeTime(r.tradeTime));
+    } else {
+      setTab("STOCK");
+      setStockName(r.name);
+      setStockId(r.id);
+      setNumber(String(r.number));
+      setPrice(String(r.price));
+      setTradeTime(formatTradeTime(r.tradeTime));
+    }
     setEditingTime(r.tradeTime);
+    setEditingId(r.id);
   };
 
   const formatTime = (t: number) => {
     const s = String(t);
+    if (s.length > 8) {
+      return new Date(t).toLocaleDateString("en-CA");
+    }
     return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
   };
 
-  const totalValue = holdings.reduce((s, h) => s + h.total, 0);
-  const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0);
+  const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
+  const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0) + optionHoldings.reduce((s, o) => s + o.revenue, 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -129,97 +249,260 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
           </div>
         </div>
 
+        {/* Tab 切换 */}
+        <div className="mb-6 flex gap-1 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-1">
+          <button
+            onClick={() => { setTab("STOCK"); setEditingTime(null); setEditingId(null); setErrorMsg(null); }}
+            className={`flex-1 rounded px-4 py-2 text-sm font-medium transition-colors ${
+              tab === "STOCK"
+                ? "bg-[var(--tv-accent)] text-white"
+                : "text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]"
+            }`}
+          >
+            股票交易
+          </button>
+          <button
+            onClick={() => { setTab("OPTION"); setEditingTime(null); setEditingId(null); setErrorMsg(null); }}
+            className={`flex-1 rounded px-4 py-2 text-sm font-medium transition-colors ${
+              tab === "OPTION"
+                ? "bg-[var(--tv-accent)] text-white"
+                : "text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]"
+            }`}
+          >
+            期权交易
+          </button>
+        </div>
+
         {/* 当前持仓表 */}
         <div className="mb-6">
-          <h3 className="mb-3 text-sm font-medium text-[var(--tv-text-secondary)]">当前持仓</h3>
-          <table>
-            <thead>
-              <tr>
-                <th className="pb-2">股票</th>
-                <th className="pb-2">代码</th>
-                <th className="pb-2">持股数</th>
-                <th className="pb-2">成本价</th>
-                <th className="pb-2">现价</th>
-                <th className="pb-2">市值</th>
-                <th className="pb-2">收益</th>
-                <th className="pb-2">收益率</th>
-              </tr>
-            </thead>
-            <tbody>
-              {holdings.map((h) => (
-                <tr key={h.id} className="text-sm">
-                  <td className="py-3">{h.name}</td>
-                  <td className="py-3 text-[var(--tv-text-secondary)]">{h.id}</td>
-                  <td className="py-3">{h.number}</td>
-                  <td className="py-3">${h.price.toFixed(2)}</td>
-                  <td className="py-3">${h.nowPrice.toFixed(2)}</td>
-                  <td className="py-3">${h.total.toLocaleString()}</td>
-                  <td className={`py-3 ${h.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                    {h.revenue >= 0 ? "+" : ""}${h.revenue.toLocaleString()}
-                  </td>
-                  <td className={`py-3 ${h.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                    {h.revenuePercentage >= 0 ? "+" : ""}{h.revenuePercentage}%
-                  </td>
+          <h3 className="mb-3 text-sm font-medium text-[var(--tv-text-secondary)]">
+            {tab === "STOCK" ? "当前股票持仓" : "当前期权持仓"}
+          </h3>
+          {tab === "STOCK" ? (
+            <table className="w-full">
+              <thead>
+                <tr className="text-xs text-[var(--tv-text-secondary)]">
+                  <th className="pb-2 text-left">股票</th>
+                  <th className="pb-2 text-right">代码</th>
+                  <th className="pb-2 text-right">持股数</th>
+                  <th className="pb-2 text-right">成本价</th>
+                  <th className="pb-2 text-right">现价</th>
+                  <th className="pb-2 text-right">市值</th>
+                  <th className="pb-2 text-right">收益</th>
+                  <th className="pb-2 text-right">收益率</th>
                 </tr>
-              ))}
-              {holdings.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
-                    暂无持仓
-                  </td>
+              </thead>
+              <tbody>
+                {holdings.map((h) => (
+                  <tr key={h.id} className="text-sm">
+                    <td className="py-3">{h.name}</td>
+                    <td className="py-3 text-right text-[var(--tv-text-secondary)]">{h.id}</td>
+                    <td className="py-3 text-right">{h.number}</td>
+                    <td className="py-3 text-right">${h.price.toFixed(2)}</td>
+                    <td className="py-3 text-right">${h.nowPrice.toFixed(2)}</td>
+                    <td className="py-3 text-right">${h.total.toLocaleString()}</td>
+                    <td className={`py-3 text-right ${h.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                      {h.revenue >= 0 ? "+" : ""}${h.revenue.toLocaleString()}
+                    </td>
+                    <td className={`py-3 text-right ${h.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                      {h.revenuePercentage >= 0 ? "+" : ""}{h.revenuePercentage}%
+                    </td>
+                  </tr>
+                ))}
+                {holdings.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
+                      暂无股票持仓
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="text-xs text-[var(--tv-text-secondary)]">
+                  <th className="pb-2 text-left">名称</th>
+                  <th className="pb-2 text-right">代码</th>
+                  <th className="pb-2 text-right">类型</th>
+                  <th className="pb-2 text-right">行权价</th>
+                  <th className="pb-2 text-right">到期日</th>
+                  <th className="pb-2 text-right">张数</th>
+                  <th className="pb-2 text-right">权利金</th>
+                  <th className="pb-2 text-right">价值</th>
+                  <th className="pb-2 text-right">收益</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {optionHoldings.map((o) => (
+                  <tr key={o.id} className="text-sm">
+                    <td className="py-3">{o.name}</td>
+                    <td className="py-3 text-right text-[var(--tv-text-secondary)]">{o.id}</td>
+                    <td className="py-3 text-right">{o.type === "CALL" ? "看涨" : "看跌"}</td>
+                    <td className="py-3 text-right">${o.strikePrice.toFixed(2)}</td>
+                    <td className="py-3 text-right">{o.expirationDate}</td>
+                    <td className="py-3 text-right">{o.contracts}</td>
+                    <td className="py-3 text-right">${o.averagePremium.toFixed(2)}</td>
+                    <td className="py-3 text-right">${o.currentValue.toLocaleString()}</td>
+                    <td className={`py-3 text-right ${o.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                      {o.revenue >= 0 ? "+" : ""}${o.revenue.toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+                {optionHoldings.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
+                      暂无期权持仓
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* 录入表单 */}
         <div className="mb-6 rounded border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4">
           <h3 className="mb-3 text-sm font-medium text-[var(--tv-text-secondary)]">
-            {editingTime ? "编辑交易" : "新增交易"}
+            {editingTime ? "编辑交易" : tab === "STOCK" ? "新增股票交易" : "新增期权交易"}
           </h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <input
-              placeholder="股票名称"
-              value={stockName}
-              onChange={(e) => setStockName(e.target.value)}
-              className="rounded px-3 py-2 text-sm"
-            />
-            <input
-              placeholder="股票代码"
-              value={stockId}
-              onChange={(e) => setStockId(e.target.value)}
-              className="rounded px-3 py-2 text-sm uppercase"
-            />
-            <input
-              placeholder="数量（正买负卖）"
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-              type="number"
-              className="rounded px-3 py-2 text-sm"
-            />
-            <input
-              placeholder="成交价格"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              type="number"
-              step="0.01"
-              className="rounded px-3 py-2 text-sm"
-            />
-            <input
-              placeholder="交易日期"
-              value={tradeTime}
-              onChange={(e) => setTradeTime(e.target.value)}
-              type="date"
-              className="rounded px-3 py-2 text-sm"
-            />
-            <button
-              onClick={handleSubmit}
-              className="rounded bg-[var(--tv-accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-80"
-            >
-              {editingTime ? "保存修改" : "添加记录"}
-            </button>
-          </div>
+
+          {errorMsg && (
+            <div className="mb-3 rounded border border-[var(--tv-red)]/30 bg-[var(--tv-red)]/10 px-3 py-2 text-sm text-[var(--tv-red)]">
+              {errorMsg}
+            </div>
+          )}
+
+          {tab === "STOCK" ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <input
+                placeholder="股票名称"
+                value={stockName}
+                onChange={(e) => setStockName(e.target.value)}
+                className="rounded px-3 py-2 text-sm"
+              />
+              <input
+                placeholder="股票代码"
+                value={stockId}
+                onChange={(e) => setStockId(e.target.value)}
+                className="rounded px-3 py-2 text-sm uppercase"
+              />
+              <input
+                placeholder="数量（正买负卖）"
+                value={number}
+                onChange={(e) => setNumber(e.target.value)}
+                type="number"
+                className="rounded px-3 py-2 text-sm"
+              />
+              <input
+                placeholder="成交价格"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                type="number"
+                step="0.01"
+                className="rounded px-3 py-2 text-sm"
+              />
+              <input
+                placeholder="交易日期"
+                value={tradeTime}
+                onChange={(e) => setTradeTime(e.target.value)}
+                type="date"
+                className="rounded px-3 py-2 text-sm"
+              />
+              <button
+                onClick={handleSubmitStock}
+                className="rounded bg-[var(--tv-accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-80"
+              >
+                {editingTime ? "保存修改" : "添加记录"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <input
+                  placeholder="期权名称（如 NVDA 260619 130C）"
+                  value={optionName}
+                  onChange={(e) => setOptionName(e.target.value)}
+                  className="rounded px-3 py-2 text-sm"
+                />
+                <input
+                  placeholder="OCC 代码"
+                  value={optionId}
+                  onChange={(e) => setOptionId(e.target.value)}
+                  className="rounded px-3 py-2 text-sm uppercase"
+                />
+                <input
+                  placeholder="正股代码"
+                  value={optionUnderlying}
+                  onChange={(e) => setOptionUnderlying(e.target.value)}
+                  className="rounded px-3 py-2 text-sm uppercase"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setOptionType("CALL")}
+                    className={`flex-1 rounded px-3 py-2 text-sm font-medium ${
+                      optionType === "CALL"
+                        ? "bg-[var(--tv-green)] text-white"
+                        : "border border-[var(--tv-border)] text-[var(--tv-text-secondary)]"
+                    }`}
+                  >
+                    看涨 CALL
+                  </button>
+                  <button
+                    onClick={() => setOptionType("PUT")}
+                    className={`flex-1 rounded px-3 py-2 text-sm font-medium ${
+                      optionType === "PUT"
+                        ? "bg-[var(--tv-red)] text-white"
+                        : "border border-[var(--tv-border)] text-[var(--tv-text-secondary)]"
+                    }`}
+                  >
+                    看跌 PUT
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <input
+                  placeholder="行权价"
+                  value={optionStrike}
+                  onChange={(e) => setOptionStrike(e.target.value)}
+                  type="number"
+                  step="0.01"
+                  className="rounded px-3 py-2 text-sm"
+                />
+                <input
+                  placeholder="到期日"
+                  value={optionExpiration}
+                  onChange={(e) => setOptionExpiration(e.target.value)}
+                  type="date"
+                  className="rounded px-3 py-2 text-sm"
+                />
+                <input
+                  placeholder="张数（正买负卖）"
+                  value={optionContracts}
+                  onChange={(e) => setOptionContracts(e.target.value)}
+                  type="number"
+                  className="rounded px-3 py-2 text-sm"
+                />
+                <input
+                  placeholder="权利金（每股）"
+                  value={optionPremium}
+                  onChange={(e) => setOptionPremium(e.target.value)}
+                  type="number"
+                  step="0.01"
+                  className="rounded px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={handleSubmitOption}
+                  className="rounded bg-[var(--tv-accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-80"
+                >
+                  {editingTime ? "保存修改" : "添加记录"}
+                </button>
+              </div>
+              <div className="text-xs text-[var(--tv-text-secondary)]">
+                美股期权 1 张 = 100 股，投入资金 = 张数 × 权利金 × 100
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 交易记录表 */}
@@ -230,15 +513,16 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
               ({tradeRecords.length} 条)
             </span>
           </h3>
-          <table>
+          <table className="w-full">
             <thead>
-              <tr>
-                <th className="pb-2">股票</th>
-                <th className="pb-2">代码</th>
-                <th className="pb-2">数量</th>
-                <th className="pb-2">价格</th>
-                <th className="pb-2">金额</th>
-                <th className="pb-2">日期</th>
+              <tr className="text-xs text-[var(--tv-text-secondary)]">
+                <th className="pb-2 text-left">名称</th>
+                <th className="pb-2 text-right">代码</th>
+                <th className="pb-2 text-right">类型</th>
+                <th className="pb-2 text-right">数量/张数</th>
+                <th className="pb-2 text-right">价格</th>
+                <th className="pb-2 text-right">金额</th>
+                <th className="pb-2 text-right">日期</th>
                 <th className="pb-2"></th>
               </tr>
             </thead>
@@ -246,24 +530,33 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
               {paginatedRecords.map((r) => (
                 <tr key={`${r.tradeTime}-${r.id}`} className="text-sm">
                   <td className="py-3">{r.name}</td>
-                  <td className="py-3 text-[var(--tv-text-secondary)]">{r.id}</td>
-                  <td className={`py-3 ${r.number >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                  <td className="py-3 text-right text-[var(--tv-text-secondary)]">{r.id}</td>
+                  <td className="py-3 text-right">
+                    <span className={`inline-block rounded px-1.5 py-0.5 text-xs ${
+                      r.assetType === "OPTION"
+                        ? "bg-purple-500/20 text-purple-400"
+                        : "bg-blue-500/20 text-blue-400"
+                    }`}>
+                      {r.assetType === "OPTION" ? "期权" : "股票"}
+                    </span>
+                  </td>
+                  <td className={`py-3 text-right ${r.number >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
                     {r.number >= 0 ? "+" : ""}{r.number}
                   </td>
-                  <td className="py-3">${r.price.toFixed(2)}</td>
-                  <td className="py-3">${r.cost.toLocaleString()}</td>
-                  <td className="py-3 text-[var(--tv-text-secondary)]">{formatTime(r.tradeTime)}</td>
+                  <td className="py-3 text-right">${r.price.toFixed(2)}</td>
+                  <td className="py-3 text-right">${r.cost.toLocaleString()}</td>
+                  <td className="py-3 text-right text-[var(--tv-text-secondary)]">{formatTime(r.tradeTime)}</td>
                   <td className="py-3">
                     <div className="flex gap-2">
                       <button onClick={() => startEdit(r)} className="text-xs text-[var(--tv-accent)] hover:underline">编辑</button>
-                      <button onClick={() => removeTradeRecord(r.tradeTime)} className="text-xs text-[var(--tv-red)] hover:underline">删除</button>
+                      <button onClick={() => removeTradeRecord(r.tradeTime, r.id)} className="text-xs text-[var(--tv-red)] hover:underline">删除</button>
                     </div>
                   </td>
                 </tr>
               ))}
               {tradeRecords.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
+                  <td colSpan={8} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
                     暂无交易记录
                   </td>
                 </tr>
@@ -271,7 +564,6 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
             </tbody>
           </table>
 
-          {/* 翻页 */}
           {totalPages > 1 && (
             <div className="mt-4 flex items-center justify-end gap-2 text-sm">
               <button

@@ -4,38 +4,39 @@ import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import { useStore } from "@/lib/store";
 import JournalTimeline from "./JournalTimeline";
-import type { StockHolding } from "@/types";
+import OptionEditModal from "./OptionEditModal";
+import type { OptionHolding } from "@/types";
 
-interface StockChartProps {
-  holding: StockHolding;
+interface OptionChartProps {
+  option: OptionHolding;
 }
 
-export default function StockChart({ holding }: StockChartProps) {
+export default function OptionChart({ option }: OptionChartProps) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
   const { activeSnapshotIndex, snapshots } = useStore();
   const [journalOpen, setJournalOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const displayData =
     activeSnapshotIndex !== null && snapshots[activeSnapshotIndex]
       ? snapshots[activeSnapshotIndex]
       : null;
 
-  const displayHolding = displayData
-    ? displayData.holdings.find((h) => h.id === holding.id) || holding
-    : holding;
+  const displayOption = displayData
+    ? displayData.optionHoldings.find((o) => o.id === option.id) || option
+    : option;
 
-  // 从快照中提取该股票在各时间点的收益率（与持仓总收益时间轴一致）
   const allPoints: { date: string; return: number }[] = [];
   for (const s of snapshots) {
-    const h = s.holdings.find((sh) => sh.id === holding.id);
-    if (h) allPoints.push({ date: s.date.slice(5), return: h.revenuePercentage });
+    const o = s.optionHoldings.find((sh) => sh.id === option.id);
+    if (o) allPoints.push({ date: s.date.slice(5), return: o.revenuePercentage });
   }
 
   if (typeof window !== "undefined") {
-    console.log(`[StockChart] ${holding.id}: allPoints=${allPoints.length}, snapshots=${snapshots.length}`);
+    console.log(`[OptionChart] ${option.id}: allPoints=${allPoints.length}, snapshots=${snapshots.length}`);
     if (snapshots.length > 0 && allPoints.length === 0) {
-      console.warn(`[StockChart] ${holding.id}: snapshots exist but no matching data. Check ID match: holding.id=${holding.id}, snapshot holding IDs:`, snapshots[0].holdings.map((h) => h.id));
+      console.warn(`[OptionChart] ${option.id}: snapshots exist but no matching option data. Check ID match: option.id=${option.id}, snapshot option IDs:`, snapshots[0].optionHoldings.map((o) => o.id));
     }
   }
 
@@ -144,39 +145,59 @@ export default function StockChart({ holding }: StockChartProps) {
 
   return (
     <>
-      <div
-        className="cursor-pointer rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4 transition-colors hover:border-[var(--tv-accent)]"
-        onClick={() => setJournalOpen(true)}
-      >
+      <div className="rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4 transition-colors hover:border-[var(--tv-accent)]">
         <div className="mb-3 flex items-center justify-between">
-          <div>
-            <span className="font-semibold">{displayHolding.name}</span>
-            <span className="ml-2 text-sm text-[var(--tv-text-secondary)]">
-              {displayHolding.id}
+          <div className="flex items-center gap-2">
+            <span className="font-semibold">{displayOption.name}</span>
+            <span className="text-sm text-[var(--tv-text-secondary)]">
+              {displayOption.id}
             </span>
           </div>
-          <div className="text-right">
-            <div className={`text-sm font-medium ${displayHolding.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-              {displayHolding.revenuePercentage >= 0 ? "+" : ""}{displayHolding.revenuePercentage}%
-            </div>
-            <div className={`text-xs ${displayHolding.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-              {displayHolding.revenue >= 0 ? "+" : ""}${displayHolding.revenue.toLocaleString()}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); setJournalOpen(true); }}
+              className="rounded px-2 py-1 text-xs text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)] hover:bg-[var(--tv-bg)] transition-colors"
+              title="看盘日志"
+            >
+              📝
+            </button>
+            <div className="text-right">
+              <div className={`text-sm font-medium ${displayOption.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                {displayOption.revenuePercentage >= 0 ? "+" : ""}{displayOption.revenuePercentage}%
+              </div>
+              <div className={`text-xs ${displayOption.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                {displayOption.revenue >= 0 ? "+" : ""}${displayOption.revenue.toLocaleString()}
+              </div>
             </div>
           </div>
         </div>
-        <div className="mb-2 flex gap-4 text-xs text-[var(--tv-text-secondary)]">
-          <span>持仓: {displayHolding.number} 股</span>
-          <span>成本: ${displayHolding.price.toFixed(2)}</span>
-          <span>现价: ${displayHolding.nowPrice.toFixed(2)}</span>
-          <span>市值: ${displayHolding.total.toLocaleString()}</span>
+        <div
+          className="mb-2 cursor-pointer"
+          onClick={() => setEditOpen(true)}
+        >
+          <div className="flex flex-wrap gap-3 text-xs text-[var(--tv-text-secondary)]">
+            <span>{displayOption.type === "CALL" ? "看涨" : "看跌"} @ ${displayOption.strikePrice}</span>
+            <span>到期: {displayOption.expirationDate}</span>
+            <span>持仓: {displayOption.contracts} 张</span>
+            <span>成本: ${displayOption.averagePremium.toFixed(2)}</span>
+            <span className="text-[var(--tv-accent)] font-medium">现价: ${displayOption.nowPremium.toFixed(2)}</span>
+            <span>价值: ${displayOption.currentValue.toLocaleString()}</span>
+          </div>
+          <div className="mt-1 text-xs text-[var(--tv-accent)]/60">点击更新最新权利金</div>
         </div>
         <div ref={chartRef} className="h-36 w-full" />
       </div>
 
+      <OptionEditModal
+        option={option}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+      />
+
       <JournalTimeline
-        stockId={holding.id}
-        stockName={holding.name}
-        targetType="STOCK"
+        stockId={option.id}
+        stockName={option.name}
+        targetType="OPTION"
         open={journalOpen}
         onClose={() => setJournalOpen(false)}
       />

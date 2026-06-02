@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   StockHolding,
+  OptionHolding,
   TradeRecord,
   CashReserve,
   JournalEntry,
@@ -13,6 +14,7 @@ import { writeData } from "./jsonbin";
 
 interface AppState {
   holdings: StockHolding[];
+  optionHoldings: OptionHolding[];
   tradeRecords: TradeRecord[];
   cash: CashReserve;
   baseCash: number;
@@ -30,10 +32,12 @@ interface AppState {
   initialize: () => Promise<void>;
 
   addTradeRecord: (record: TradeRecord) => void;
-  removeTradeRecord: (tradeTime: number) => void;
-  updateTradeRecord: (oldTradeTime: number, record: TradeRecord) => void;
+  removeTradeRecord: (tradeTime: number, id: string) => void;
+  updateTradeRecord: (oldTradeTime: number, oldId: string, record: TradeRecord) => void;
 
   updatePrices: (updates: { id: string; nowPrice: number }[]) => void;
+  updateOptionPremiums: (updates: { id: string; nowPremium: number }[]) => void;
+  updateOptionHolding: (id: string, updates: Partial<OptionHolding>) => void;
 
   updateCash: (total: number) => void;
 
@@ -64,12 +68,13 @@ function calcTradeCashAdjustment(records: TradeRecord[]): number {
 function recalcHoldings(
   records: TradeRecord[]
 ): StockHolding[] {
+  const stockRecords = records.filter((r) => !r.assetType || r.assetType === "STOCK");
   const stockMap = new Map<
     string,
     { name: string; totalNumber: number; totalCost: number }
   >();
 
-  for (const r of records) {
+  for (const r of stockRecords) {
     if (!stockMap.has(r.id)) {
       stockMap.set(r.id, {
         name: r.name,
@@ -120,6 +125,78 @@ function recalcHoldings(
   return holdings;
 }
 
+function recalcOptionHoldings(records: TradeRecord[]): OptionHolding[] {
+  const optionRecords = records.filter((r) => r.assetType === "OPTION");
+  const optionMap = new Map<string, {
+    name: string;
+    underlyingSymbol: string;
+    type: "CALL" | "PUT";
+    strikePrice: number;
+    expirationDate: string;
+    contracts: number;
+    averagePremium: number;
+  }>();
+
+  for (const r of optionRecords) {
+    if (!optionMap.has(r.id)) {
+      optionMap.set(r.id, {
+        name: r.name,
+        underlyingSymbol: r.underlyingSymbol ?? "",
+        type: r.optionType ?? "CALL",
+        strikePrice: r.optionStrike ?? 0,
+        expirationDate: r.optionExpiration ?? "",
+        contracts: 0,
+        averagePremium: 0,
+      });
+    }
+    const entry = optionMap.get(r.id)!;
+
+    if (r.number > 0) {
+      const newContracts = entry.contracts + r.number;
+      entry.averagePremium =
+        newContracts > 0
+          ? ((entry.averagePremium * entry.contracts) + (r.price * r.number)) / newContracts
+          : 0;
+      entry.contracts = newContracts;
+    } else {
+      entry.contracts = Math.max(0, entry.contracts - Math.abs(r.number));
+    }
+  }
+
+  const holdings: OptionHolding[] = [];
+  for (const [id, entry] of optionMap) {
+    if (entry.contracts <= 0) continue;
+    const totalCost = entry.averagePremium * entry.contracts * 100;
+    holdings.push({
+      id,
+      underlyingSymbol: entry.underlyingSymbol,
+      name: entry.name,
+      type: entry.type,
+      strikePrice: entry.strikePrice,
+      expirationDate: entry.expirationDate,
+      contracts: entry.contracts,
+      averagePremium: entry.averagePremium,
+      totalCost,
+      nowPremium: entry.averagePremium,
+      currentValue: totalCost,
+      revenue: 0,
+      revenuePercentage: 0,
+    });
+  }
+
+  return holdings;
+}
+
+function calcOptionRevenue(options: OptionHolding[]): OptionHolding[] {
+  return options.map((o) => {
+    const currentValue = o.nowPremium * o.contracts * 100;
+    const revenue = currentValue - o.totalCost;
+    const revenuePercentage =
+      o.totalCost > 0 ? parseFloat(((revenue / o.totalCost) * 100).toFixed(2)) : 0;
+    return { ...o, currentValue, revenue, revenuePercentage };
+  });
+}
+
 function calcRevenue(holdings: StockHolding[]): StockHolding[] {
   return holdings.map((h) => {
     const total = h.nowPrice * h.number;
@@ -132,6 +209,7 @@ function calcRevenue(holdings: StockHolding[]): StockHolding[] {
 
 export const useStore = create<AppState>((set, get) => ({
   holdings: [],
+  optionHoldings: [],
   tradeRecords: [],
   cash: { id: "cash", name: "现金", total: 10000 },
   baseCash: 10000,
@@ -143,7 +221,7 @@ export const useStore = create<AppState>((set, get) => ({
   loaded: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, returns, storedBaseCash, storedHoldings] = await Promise.all([
+    const [records, plans, journals, snaps, returns, storedBaseCash, storedHoldings, storedOptionHoldings] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
       getItem<JournalEntry[]>("journalEntries"),
@@ -151,7 +229,16 @@ export const useStore = create<AppState>((set, get) => ({
       getItem<DailyPricePoint[]>("dailyReturns"),
       getItem<number>("baseCash"),
       getItem<StockHolding[]>("holdings"),
+      getItem<OptionHolding[]>("optionHoldings"),
     ]);
+
+    console.log("[initialize] raw data from IndexedDB:", {
+      records: records?.length ?? 0,
+      snaps: snaps?.length ?? 0,
+      returns: returns?.length ?? 0,
+      storedHoldings: storedHoldings?.length ?? 0,
+      storedOptionHoldings: storedOptionHoldings?.length ?? 0,
+    });
 
     const tradeRecords = records ?? [];
     const tradePlans = (plans ?? []).map((p) => {
@@ -164,9 +251,15 @@ export const useStore = create<AppState>((set, get) => ({
         riskRewardLose: old.riskRewardLose ?? 1,
       };
     });
-    const journalEntries = journals ?? [];
+    const journalEntries = (journals ?? []).map((j) => {
+      const old = j as JournalEntry & { targetType?: string };
+      return { ...old, targetType: old.targetType ?? "STOCK" };
+    });
     const rawSnapshots = snaps ?? [];
-    const snapshots = [...new Map(rawSnapshots.map((s) => [s.date, s])).values()];
+    const snapshots: PortfolioSnapshot[] = [...new Map(rawSnapshots.map((s) => [s.date, s])).values()].map((s) => ({
+      ...s,
+      optionHoldings: (s as PortfolioSnapshot & { optionHoldings?: OptionHolding[] }).optionHoldings ?? [],
+    }));
     const baseCash = storedBaseCash ?? 10000;
 
     const rawReturns = returns ?? [];
@@ -177,15 +270,31 @@ export const useStore = create<AppState>((set, get) => ({
     const dailyReturns = [...dedupedMap.values()];
 
     const holdings = recalcHoldings(tradeRecords);
+    const optionHoldings = recalcOptionHoldings(tradeRecords);
+
+    console.log("[initialize] recalc result:", {
+      stockHoldings: holdings.length,
+      optionHoldings: optionHoldings.length,
+      holdingIds: holdings.map((h) => h.id),
+      snapshotDates: snapshots.map((s) => s.date),
+    });
     const cashAdj = calcTradeCashAdjustment(tradeRecords);
     const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + cashAdj };
 
-    // 若存储中有 pre-set nowPrice，合并到初始持仓（适用于首次手动录入）
     if (storedHoldings && storedHoldings.length > 0) {
       for (const h of holdings) {
         const stored = storedHoldings.find((s) => s.id === h.id);
         if (stored && stored.nowPrice > 0) {
           h.nowPrice = stored.nowPrice;
+        }
+      }
+    }
+
+    if (storedOptionHoldings && storedOptionHoldings.length > 0) {
+      for (const o of optionHoldings) {
+        const stored = storedOptionHoldings.find((s) => s.id === o.id);
+        if (stored && stored.nowPremium > 0) {
+          o.nowPremium = stored.nowPremium;
         }
       }
     }
@@ -198,6 +307,7 @@ export const useStore = create<AppState>((set, get) => ({
       dailyReturns,
       baseCash,
       holdings: calcRevenue(holdings),
+      optionHoldings: calcOptionRevenue(optionHoldings),
       cash,
       loaded: true,
     });
@@ -205,29 +315,28 @@ export const useStore = create<AppState>((set, get) => ({
 
   addTradeRecord: (record) => {
     const records = [...get().tradeRecords, record];
-    const holdings = recalcHoldings(records);
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-    set({
-      tradeRecords: records,
-      holdings: calcRevenue(holdings),
-      cash,
-    });
+    const holdings = calcRevenue(recalcHoldings(records));
+    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
+    set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
     get().takeSnapshot();
   },
 
-  removeTradeRecord: (tradeTime) => {
+  removeTradeRecord: (tradeTime, id) => {
     const records = get().tradeRecords.filter(
-      (r) => r.tradeTime !== tradeTime
+      (r) => !(r.tradeTime === tradeTime && r.id === id)
     );
-    const holdings = recalcHoldings(records);
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
+    const holdings = calcRevenue(recalcHoldings(records));
+    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
     set({
       tradeRecords: records,
-      holdings: calcRevenue(holdings),
+      holdings,
+      optionHoldings,
       cash,
     });
     setItem("tradeRecords", records);
@@ -235,18 +344,15 @@ export const useStore = create<AppState>((set, get) => ({
     get().takeSnapshot();
   },
 
-  updateTradeRecord: (oldTradeTime, record) => {
+  updateTradeRecord: (oldTradeTime, oldId, record) => {
     const records = get().tradeRecords.map((r) =>
-      r.tradeTime === oldTradeTime ? record : r
+      r.tradeTime === oldTradeTime && r.id === oldId ? record : r
     );
-    const holdings = recalcHoldings(records);
     const cashAdj = calcTradeCashAdjustment(records);
     const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-    set({
-      tradeRecords: records,
-      holdings: calcRevenue(holdings),
-      cash,
-    });
+    const holdings = calcRevenue(recalcHoldings(records));
+    const optionHoldings = calcOptionRevenue(recalcOptionHoldings(records));
+    set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
     get().takeSnapshot();
@@ -261,6 +367,37 @@ export const useStore = create<AppState>((set, get) => ({
     set({ holdings: calcRevenue(holdings) });
     setItem("holdings", holdings);
     markPendingSync("holdings", holdings);
+    get().takeSnapshot();
+  },
+
+  updateOptionPremiums: (updates) => {
+    const optionHoldings = get().optionHoldings.map((o) => {
+      const update = updates.find((u) => u.id === o.id);
+      if (!update) return o;
+      return { ...o, nowPremium: update.nowPremium };
+    });
+    set({ optionHoldings: calcOptionRevenue(optionHoldings) });
+    setItem("optionHoldings", optionHoldings);
+    markPendingSync("optionHoldings", optionHoldings);
+    get().takeSnapshot();
+  },
+
+  updateOptionHolding: (id, partial) => {
+    const optionHoldings = get().optionHoldings.map((o) => {
+      if (o.id !== id) return o;
+      const updated = { ...o, ...partial };
+      updated.totalCost = updated.averagePremium * updated.contracts * 100;
+      updated.currentValue = updated.nowPremium * updated.contracts * 100;
+      updated.revenue = updated.currentValue - updated.totalCost;
+      updated.revenuePercentage =
+        updated.totalCost > 0
+          ? parseFloat(((updated.revenue / updated.totalCost) * 100).toFixed(2))
+          : 0;
+      return updated;
+    });
+    set({ optionHoldings });
+    setItem("optionHoldings", optionHoldings);
+    markPendingSync("optionHoldings", optionHoldings);
     get().takeSnapshot();
   },
 
@@ -304,11 +441,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   takeSnapshot: () => {
-    const { holdings, cash } = get();
+    const { holdings, optionHoldings, cash } = get();
     const date = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    const totalValue = holdings.reduce((s, h) => s + h.total, 0) + cash.total;
-    const totalCost = holdings.reduce((s, h) => s + h.cost, 0);
-    const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0);
+    const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
+    const totalCost = holdings.reduce((s, h) => s + h.cost, 0) + optionHoldings.reduce((s, o) => s + o.totalCost, 0);
+    const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0) + optionHoldings.reduce((s, o) => s + o.revenue, 0);
     const totalReturnPct =
       totalCost > 0
         ? parseFloat(((totalRevenue / totalCost) * 100).toFixed(2))
@@ -318,6 +455,7 @@ export const useStore = create<AppState>((set, get) => ({
       timestamp: Date.now(),
       date,
       holdings: JSON.parse(JSON.stringify(holdings)),
+      optionHoldings: JSON.parse(JSON.stringify(optionHoldings)),
       cash: JSON.parse(JSON.stringify(cash)),
       dailyReturn: totalReturnPct,
     };
@@ -345,7 +483,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncToJsonBin: async () => {
-    const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash } =
+    const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash, holdings, optionHoldings } =
       get();
     const data = {
       tradeRecords,
@@ -354,6 +492,8 @@ export const useStore = create<AppState>((set, get) => ({
       snapshots,
       dailyReturns,
       baseCash,
+      holdings,
+      optionHoldings,
     };
     const ok = await writeData(data);
     if (ok) {

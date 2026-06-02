@@ -4,12 +4,13 @@ import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 import TotalPortfolio from "@/components/TotalPortfolio";
 import StockChart from "@/components/StockChart";
+import OptionChart from "@/components/OptionChart";
 import TradePlan from "@/components/TradePlan";
 import TimelineSlider from "@/components/TimelineSlider";
 import PriceUpdater from "@/components/PriceUpdater";
 
 export default function Home() {
-  const { holdings, loaded, syncToJsonBin } = useStore();
+  const { holdings, optionHoldings, loaded, syncToJsonBin } = useStore();
 
   // 定期同步到 JSONBin
   useEffect(() => {
@@ -59,6 +60,17 @@ export default function Home() {
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {holdings.map((h) => (
                     <StockChart key={h.id} holding={h} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {optionHoldings.length > 0 && (
+              <div>
+                <h2 className="mb-4 text-base font-semibold">期权持仓收益</h2>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {optionHoldings.map((o) => (
+                    <OptionChart key={o.id} option={o} />
                   ))}
                 </div>
               </div>

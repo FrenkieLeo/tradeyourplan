@@ -9,6 +9,7 @@ interface JournalTimelineProps {
   stockName: string;
   open: boolean;
   onClose: () => void;
+  targetType?: "STOCK" | "OPTION";
 }
 
 export default function JournalTimeline({
@@ -16,6 +17,7 @@ export default function JournalTimeline({
   stockName,
   open,
   onClose,
+  targetType = "STOCK",
 }: JournalTimelineProps) {
   const { journalEntries, addJournalEntry } = useStore();
   const [content, setContent] = useState("");
@@ -35,6 +37,7 @@ export default function JournalTimeline({
     );
     addJournalEntry({
       id: stockId,
+      targetType,
       name: stockName,
       time,
       content: content.trim(),
