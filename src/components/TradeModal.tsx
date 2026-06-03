@@ -282,14 +282,14 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
             <table className="w-full">
               <thead>
                 <tr className="text-xs text-[var(--tv-text-secondary)]">
-                  <th className="pb-2 text-left">股票</th>
-                  <th className="pb-2 text-right">代码</th>
-                  <th className="pb-2 text-right">持股数</th>
-                  <th className="pb-2 text-right">成本价</th>
-                  <th className="pb-2 text-right">现价</th>
-                  <th className="pb-2 text-right">市值</th>
-                  <th className="pb-2 text-right">收益</th>
-                  <th className="pb-2 text-right">收益率</th>
+                  <th className="py-3 text-left">股票</th>
+                  <th className="py-3 text-right">代码</th>
+                  <th className="py-3 text-right">持股数</th>
+                  <th className="py-3 text-right">成本价</th>
+                  <th className="py-3 text-right">现价</th>
+                  <th className="py-3 text-right">市值</th>
+                  <th className="py-3 text-right">收益</th>
+                  <th className="py-3 text-right">收益率</th>
                 </tr>
               </thead>
               <tbody>
@@ -322,15 +322,15 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
             <table className="w-full">
               <thead>
                 <tr className="text-xs text-[var(--tv-text-secondary)]">
-                  <th className="pb-2 text-left">名称</th>
-                  <th className="pb-2 text-right">代码</th>
-                  <th className="pb-2 text-right">类型</th>
-                  <th className="pb-2 text-right">行权价</th>
-                  <th className="pb-2 text-right">到期日</th>
-                  <th className="pb-2 text-right">张数</th>
-                  <th className="pb-2 text-right">权利金</th>
-                  <th className="pb-2 text-right">价值</th>
-                  <th className="pb-2 text-right">收益</th>
+                  <th className="py-3 text-left">名称</th>
+                  <th className="py-3 text-right">代码</th>
+                  <th className="py-3 text-right">类型</th>
+                  <th className="py-3 text-right">行权价</th>
+                  <th className="py-3 text-right">到期日</th>
+                  <th className="py-3 text-right">张数</th>
+                  <th className="py-3 text-right">权利金</th>
+                  <th className="py-3 text-right">价值</th>
+                  <th className="py-3 text-right">收益</th>
                 </tr>
               </thead>
               <tbody>
@@ -516,14 +516,14 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
           <table className="w-full">
             <thead>
               <tr className="text-xs text-[var(--tv-text-secondary)]">
-                <th className="pb-2 text-left">名称</th>
-                <th className="pb-2 text-right">代码</th>
-                <th className="pb-2 text-right">类型</th>
-                <th className="pb-2 text-right">数量/张数</th>
-                <th className="pb-2 text-right">价格</th>
-                <th className="pb-2 text-right">金额</th>
-                <th className="pb-2 text-right">日期</th>
-                <th className="pb-2"></th>
+                <th className="py-3 text-left">名称</th>
+                <th className="py-3 text-right">代码</th>
+                <th className="py-3 text-right">类型</th>
+                <th className="py-3 text-right">数量/张数</th>
+                <th className="py-3 text-right">价格</th>
+                <th className="py-3 text-right">金额</th>
+                <th className="py-3 text-right">日期</th>
+                <th className="py-3"></th>
               </tr>
             </thead>
             <tbody>

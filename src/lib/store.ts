@@ -28,6 +28,7 @@ interface AppState {
   activeSnapshotIndex: number | null;
 
   loaded: boolean;
+  isRefreshing: boolean;
 
   initialize: () => Promise<void>;
 
@@ -49,6 +50,8 @@ interface AppState {
 
   takeSnapshot: () => void;
   setActiveSnapshot: (index: number | null) => void;
+
+  setRefreshing: (refreshing: boolean) => void;
 
   syncToJsonBin: () => Promise<void>;
 }
@@ -219,6 +222,7 @@ export const useStore = create<AppState>((set, get) => ({
   dailyReturns: [],
   activeSnapshotIndex: null,
   loaded: false,
+  isRefreshing: false,
 
   initialize: async () => {
     const [records, plans, journals, snaps, returns, storedBaseCash, storedHoldings, storedOptionHoldings] = await Promise.all([
@@ -256,10 +260,12 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...old, targetType: old.targetType ?? "STOCK" };
     });
     const rawSnapshots = snaps ?? [];
-    const snapshots: PortfolioSnapshot[] = [...new Map(rawSnapshots.map((s) => [s.date, s])).values()].map((s) => ({
-      ...s,
-      optionHoldings: (s as PortfolioSnapshot & { optionHoldings?: OptionHolding[] }).optionHoldings ?? [],
-    }));
+    const snapshots: PortfolioSnapshot[] = [...new Map(rawSnapshots.map((s) => [s.date, s])).values()]
+      .map((s) => ({
+        ...s,
+        optionHoldings: (s as PortfolioSnapshot & { optionHoldings?: OptionHolding[] }).optionHoldings ?? [],
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
     const baseCash = storedBaseCash ?? 10000;
 
     const rawReturns = returns ?? [];
@@ -267,7 +273,7 @@ export const useStore = create<AppState>((set, get) => ({
     for (const d of rawReturns) {
       dedupedMap.set(d.date, d);
     }
-    const dailyReturns = [...dedupedMap.values()];
+    const dailyReturns = [...dedupedMap.values()].sort((a, b) => a.date.localeCompare(b.date));
 
     const holdings = recalcHoldings(tradeRecords);
     const optionHoldings = recalcOptionHoldings(tradeRecords);
@@ -282,22 +288,49 @@ export const useStore = create<AppState>((set, get) => ({
     const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + cashAdj };
 
     if (storedHoldings && storedHoldings.length > 0) {
+      console.log("[initialize] restoring nowPrice from storedHoldings", storedHoldings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price, total: h.total })));
       for (const h of holdings) {
         const stored = storedHoldings.find((s) => s.id === h.id);
         if (stored && stored.nowPrice > 0) {
           h.nowPrice = stored.nowPrice;
         }
       }
+    } else if (snapshots.length > 0) {
+      const latest = snapshots[snapshots.length - 1];
+      console.log("[initialize] storedHoldings empty, restoring nowPrice from latest snapshot", { snapshotDate: latest.date, holdings: latest.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })) });
+      for (const h of holdings) {
+        const snap = latest.holdings.find((s) => s.id === h.id);
+        if (snap && snap.nowPrice > 0) {
+          h.nowPrice = snap.nowPrice;
+        }
+      }
+    } else {
+      console.log("[initialize] no storedHoldings AND no snapshots — nowPrice stays at cost basis");
     }
 
     if (storedOptionHoldings && storedOptionHoldings.length > 0) {
+      console.log("[initialize] restoring nowPremium from storedOptionHoldings", storedOptionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })));
       for (const o of optionHoldings) {
         const stored = storedOptionHoldings.find((s) => s.id === o.id);
         if (stored && stored.nowPremium > 0) {
           o.nowPremium = stored.nowPremium;
         }
       }
+    } else if (snapshots.length > 0) {
+      const latest = snapshots[snapshots.length - 1];
+      console.log("[initialize] storedOptionHoldings empty, restoring nowPremium from latest snapshot", { snapshotDate: latest.date, options: latest.optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })) });
+      for (const o of optionHoldings) {
+        const snap = latest.optionHoldings.find((s) => s.id === o.id);
+        if (snap && snap.nowPremium > 0) {
+          o.nowPremium = snap.nowPremium;
+        }
+      }
+    } else {
+      console.log("[initialize] no storedOptionHoldings AND no snapshots — nowPremium stays at cost");
     }
+
+    console.log("[initialize] final holdings before set:", holdings.map((h) => ({ id: h.id, name: h.name, number: h.number, price: h.price, nowPrice: h.nowPrice, cost: h.cost, total: h.price * h.number, totalWithNowPrice: h.nowPrice * h.number, revenue: (h.nowPrice * h.number) - h.cost })));
+    console.log("[initialize] final optionHoldings before set:", optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium, totalCost: o.totalCost, currentValue: o.nowPremium * o.contracts * 100, revenue: (o.nowPremium * o.contracts * 100) - o.totalCost })));
 
     set({
       tradeRecords,
@@ -507,18 +540,20 @@ export const useStore = create<AppState>((set, get) => ({
     };
 
     const existingIdx = get().snapshots.findIndex((s) => s.date === date);
-    const snapshots =
+    const isNew = existingIdx < 0;
+    const snapshots = (
       existingIdx >= 0
         ? get().snapshots.map((s, i) => (i === existingIdx ? snapshot : s))
-        : [...get().snapshots, snapshot];
-    set({ snapshots });
+        : [...get().snapshots, snapshot]
+    ).sort((a, b) => a.date.localeCompare(b.date));
+    set({ snapshots, activeSnapshotIndex: isNew ? null : get().activeSnapshotIndex });
     setItem("snapshots", snapshots);
     markPendingSync("snapshots", snapshots);
 
     const dailyReturns = [
       ...get().dailyReturns.filter((d) => d.date !== date),
       { date, return: totalRevenue },
-    ];
+    ].sort((a, b) => a.date.localeCompare(b.date));
     set({ dailyReturns });
     setItem("dailyReturns", dailyReturns);
     markPendingSync("dailyReturns", dailyReturns);
@@ -526,6 +561,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   setActiveSnapshot: (index) => {
     set({ activeSnapshotIndex: index });
+  },
+
+  setRefreshing: (refreshing) => {
+    set({ isRefreshing: refreshing });
   },
 
   syncToJsonBin: async () => {

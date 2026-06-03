@@ -13,7 +13,7 @@ interface StockChartProps {
 export default function StockChart({ holding }: StockChartProps) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { activeSnapshotIndex, snapshots } = useStore();
+  const { activeSnapshotIndex, snapshots, isRefreshing } = useStore();
   const [journalOpen, setJournalOpen] = useState(false);
 
   const displayData =
@@ -34,6 +34,19 @@ export default function StockChart({ holding }: StockChartProps) {
 
   if (typeof window !== "undefined") {
     console.log(`[StockChart] ${holding.id}: allPoints=${allPoints.length}, snapshots=${snapshots.length}`);
+    console.log(`[StockChart] ${holding.id} displayHolding:`, {
+      activeSnapshotIndex,
+      name: displayHolding.name,
+      number: displayHolding.number,
+      price: displayHolding.price,
+      nowPrice: displayHolding.nowPrice,
+      cost: displayHolding.cost,
+      total: displayHolding.total,
+      revenue: displayHolding.revenue,
+      revenuePercentage: displayHolding.revenuePercentage,
+      fromSnapshot: !!displayData,
+      snapshotDate: displayData?.date,
+    });
     if (snapshots.length > 0 && allPoints.length === 0) {
       console.warn(`[StockChart] ${holding.id}: snapshots exist but no matching data. Check ID match: holding.id=${holding.id}, snapshot holding IDs:`, snapshots[0].holdings.map((h) => h.id));
     }
@@ -140,7 +153,7 @@ export default function StockChart({ holding }: StockChartProps) {
     const handleResize = () => chartInstance.current?.resize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [allPoints]);
+  }, [allPoints, isRefreshing]);
 
   return (
     <>
@@ -148,29 +161,43 @@ export default function StockChart({ holding }: StockChartProps) {
         className="cursor-pointer rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4 transition-colors hover:border-[var(--tv-accent)]"
         onClick={() => setJournalOpen(true)}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <span className="font-semibold">{displayHolding.name}</span>
-            <span className="ml-2 text-sm text-[var(--tv-text-secondary)]">
-              {displayHolding.id}
-            </span>
-          </div>
-          <div className="text-right">
-            <div className={`text-sm font-medium ${displayHolding.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-              {displayHolding.revenuePercentage >= 0 ? "+" : ""}{displayHolding.revenuePercentage}%
-            </div>
-            <div className={`text-xs ${displayHolding.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-              {displayHolding.revenue >= 0 ? "+" : ""}${displayHolding.revenue.toLocaleString()}
+        {isRefreshing ? (
+          <div className="flex h-48 w-full items-center justify-center">
+            <div className="text-center">
+              <svg className="mx-auto mb-2 h-6 w-6 animate-spin text-[var(--tv-text-secondary)]" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <div className="text-sm text-[var(--tv-text-secondary)]">正在同步...</div>
             </div>
           </div>
-        </div>
-        <div className="mb-2 flex gap-4 text-xs text-[var(--tv-text-secondary)]">
-          <span>持仓: {displayHolding.number} 股</span>
-          <span>成本: ${displayHolding.price.toFixed(2)}</span>
-          <span>现价: ${displayHolding.nowPrice.toFixed(2)}</span>
-          <span>市值: ${displayHolding.total.toLocaleString()}</span>
-        </div>
-        <div ref={chartRef} className="h-36 w-full" />
+        ) : (
+          <>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <span className="font-semibold">{displayHolding.name}</span>
+                <span className="ml-2 text-sm text-[var(--tv-text-secondary)]">
+                  {displayHolding.id}
+                </span>
+              </div>
+              <div className="text-right">
+                <div className={`text-sm font-medium ${displayHolding.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                  {displayHolding.revenuePercentage >= 0 ? "+" : ""}{displayHolding.revenuePercentage}%
+                </div>
+                <div className={`text-xs ${displayHolding.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                  {displayHolding.revenue >= 0 ? "+" : ""}${displayHolding.revenue.toLocaleString()}
+                </div>
+              </div>
+            </div>
+            <div className="mb-2 flex gap-4 text-xs text-[var(--tv-text-secondary)]">
+              <span>持仓: {displayHolding.number} 股</span>
+              <span>成本: ${displayHolding.price.toFixed(2)}</span>
+              <span>现价: ${displayHolding.nowPrice.toFixed(2)}</span>
+              <span>市值: ${displayHolding.total.toLocaleString()}</span>
+            </div>
+            <div ref={chartRef} className="h-36 w-full" />
+          </>
+        )}
       </div>
 
       <JournalTimeline

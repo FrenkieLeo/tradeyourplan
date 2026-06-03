@@ -17,11 +17,11 @@ import type {
 
 const LAST_UPDATE_KEY = "lastPriceUpdateDate";
 const API_DELAY_MS = 14_000;
-const isFetching = { current: false };
 
 async function fetchQuotesWithRateLimit(
   symbols: { id: string }[],
   setStatus: (s: string | null) => void,
+  setProgress: (p: number) => void,
   updatePrices: (updates: { id: string; nowPrice: number }[]) => void,
 ) {
   const updates: { id: string; nowPrice: number }[] = [];
@@ -29,6 +29,7 @@ async function fetchQuotesWithRateLimit(
   for (let i = 0; i < symbols.length; i++) {
     const h = symbols[i];
     setStatus(`正在获取价格 (${i + 1}/${symbols.length})...`);
+    setProgress(((i + 1) / symbols.length) * 100);
 
     const quote = await fetchQuote(h.id);
     if (quote && quote.price > 0) {
@@ -47,14 +48,14 @@ async function fetchQuotesWithRateLimit(
   } else {
     setStatus("未能获取到价格数据");
   }
-  setTimeout(() => setStatus(null), 3000);
+  setProgress(100);
 }
 
 export default function PriceUpdater() {
-  const { holdings, updatePrices, initialize, loaded, takeSnapshot } = useStore();
-  const [updating, setUpdating] = useState(false);
+  const { holdings, updatePrices, initialize, loaded, takeSnapshot, setRefreshing } = useStore();
   const [status, setStatus] = useState<string | null>(null);
-  const priceFetched = useRef(false);
+  const [progress, setProgress] = useState(0);
+  const initialized = useRef(false);
 
   const shouldUpdateToday = useCallback(() => {
     const today = getETDate();
@@ -62,61 +63,16 @@ export default function PriceUpdater() {
     return lastUpdate !== today;
   }, []);
 
-  // 初始化时：确保持仓有最新价格 + 当日快照
+  // 单次初始化流程：加载远程 → 初始化 → 获取价格 → 快照
   useEffect(() => {
-    if (!loaded || priceFetched.current) return;
-    priceFetched.current = true;
+    if (initialized.current) return;
+    initialized.current = true;
 
-    const ensureTodaySnapshot = () => {
-      const today = getETDate();
-      const state = useStore.getState();
-      const exists = state.snapshots.some((s) => s.date === today);
-      if (!exists && (state.holdings.length > 0 || state.optionHoldings.length > 0)) {
-        console.log(`[PriceUpdater] creating today's snapshot (${today})`);
-        takeSnapshot();
-      }
-    };
-
-    const initAndMaybeUpdate = async () => {
-      const uninitialized = holdings.filter((h) => h.nowPrice === h.price);
-      const needsPriceUpdate = uninitialized.length > 0;
-
-      if (needsPriceUpdate) {
-        isFetching.current = true;
-        setStatus(`正在获取 ${uninitialized.length} 只股票价格...`);
-        await fetchQuotesWithRateLimit(uninitialized, setStatus, updatePrices);
-        isFetching.current = false;
-      }
-
-      ensureTodaySnapshot();
-
-      if (!needsPriceUpdate) {
-        setStatus("数据已就绪");
-        setTimeout(() => setStatus(null), 2000);
-      }
-    };
-
-    initAndMaybeUpdate();
-  }, [loaded]);
-
-  // 每 5 分钟轮询：收盘后自动更新
-  useEffect(() => {
-    if (!loaded) return;
-    const interval = setInterval(() => {
-      if (isFetching.current) return;
-      if (isWeekend()) return;
-      if (isAfterMarketClose() && shouldUpdateToday()) {
-        isFetching.current = true;
-        fetchQuotesWithRateLimit(holdings, setStatus, updatePrices)
-          .finally(() => { isFetching.current = false; });
-      }
-    }, 300_000);
-    return () => clearInterval(interval);
-  }, [loaded, holdings, updatePrices]);
-
-  useEffect(() => {
     const loadFromRemote = async () => {
+      setRefreshing(true);
+      setProgress(0);
       setStatus("正在加载远程数据...");
+
       try {
         const remote = await readData<{
           tradeRecords: TradeRecord[];
@@ -130,14 +86,61 @@ export default function PriceUpdater() {
           lastPriceUpdateDate?: string;
         }>();
 
+        console.log("[PriceUpdater] JSONBin remote data:", {
+          hasRemote: !!remote,
+          tradeRecords: remote?.tradeRecords?.length ?? 0,
+          snapshots: remote?.snapshots?.length ?? 0,
+          dailyReturns: remote?.dailyReturns?.length ?? 0,
+          holdings: remote?.holdings?.length ?? 0,
+          holdingsSample: remote?.holdings?.slice(0, 2).map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })),
+          optionHoldings: remote?.optionHoldings?.length ?? 0,
+          baseCash: remote?.baseCash,
+          lastPriceUpdateDate: remote?.lastPriceUpdateDate,
+        });
+
         if (remote) {
+          const today = getETDate();
+          const cleanedSnapshots = (remote.snapshots ?? []).filter((s) => s.date <= today);
+          const cleanedReturns = (remote.dailyReturns ?? []).filter((d) => d.date <= today);
+          if (cleanedSnapshots.length !== (remote.snapshots?.length ?? 0) || cleanedReturns.length !== (remote.dailyReturns?.length ?? 0)) {
+            console.log("[PriceUpdater] cleaning future/wrong snapshots", {
+              before: remote.snapshots?.length, after: cleanedSnapshots.length,
+              removed: (remote.snapshots ?? []).filter((s) => s.date > today).map((s) => s.date),
+            });
+            remote.snapshots = cleanedSnapshots;
+            remote.dailyReturns = cleanedReturns;
+            try {
+              const { writeData } = await import("@/lib/jsonbin");
+              await writeData(remote);
+            } catch { /* best-effort */ }
+          }
+
+          if (remote.holdings?.length) {
+            console.log("[PriceUpdater] writing remote.holdings to IndexedDB:", remote.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })));
+            await setItem("holdings", remote.holdings);
+          } else if (remote.snapshots?.length) {
+            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
+            const latest = sorted[sorted.length - 1];
+            if (latest.holdings?.length) {
+              console.log("[PriceUpdater] deriving holdings from latest snapshot:", { date: latest.date, holdings: latest.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })) });
+              await setItem("holdings", latest.holdings);
+            }
+          }
+          if (remote.optionHoldings?.length) {
+            await setItem("optionHoldings", remote.optionHoldings);
+          } else if (remote.snapshots?.length) {
+            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
+            const latest = sorted[sorted.length - 1];
+            if (latest.optionHoldings?.length) {
+              console.log("[PriceUpdater] deriving optionHoldings from latest snapshot");
+              await setItem("optionHoldings", latest.optionHoldings);
+            }
+          }
           if (remote.tradeRecords?.length) await setItem("tradeRecords", remote.tradeRecords);
           if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
           if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
           if (remote.snapshots?.length) await setItem("snapshots", remote.snapshots);
           if (remote.dailyReturns?.length) await setItem("dailyReturns", remote.dailyReturns);
-          if (remote.holdings?.length) await setItem("holdings", remote.holdings);
-          if (remote.optionHoldings?.length) await setItem("optionHoldings", remote.optionHoldings);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
           if (remote.lastPriceUpdateDate) localStorage.setItem(LAST_UPDATE_KEY, remote.lastPriceUpdateDate);
         } else {
@@ -154,19 +157,84 @@ export default function PriceUpdater() {
             console.log("JSONBin 已创建，新 Bin ID:", newBinId);
           }
         }
-      } catch {
-        // silent fail
+      } catch (e) {
+        console.error("[PriceUpdater] JSONBin readData error:", e);
       }
+
+      setProgress(30);
+
+      console.log("[PriceUpdater] calling initialize()");
       await initialize();
+
+      const state = useStore.getState();
+      console.log("[PriceUpdater] after initialize, holdings:", state.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price, cost: h.cost, revenue: h.revenue })));
+      console.log("[PriceUpdater] after initialize, dailyReturns:", state.dailyReturns.map((d) => d));
+      console.log("[PriceUpdater] after initialize, snapshots:", state.snapshots.map((s) => ({ date: s.date, dailyReturn: s.dailyReturn, holdings: s.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice })) })));
+
+      const uninitialized = state.holdings.filter((h) => h.nowPrice === h.price);
+      const staleLastUpdate = !isWeekend() && shouldUpdateToday();
+      console.log("[PriceUpdater] uninitialized count:", uninitialized.length, "staleLastUpdate:", staleLastUpdate, "details:", uninitialized.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })));
+
+      const needFetch = uninitialized.length > 0 || (staleLastUpdate && state.holdings.length > 0);
+      if (needFetch) {
+        const toFetch = uninitialized.length > 0 ? uninitialized : state.holdings;
+        setStatus(`正在获取 ${toFetch.length} 只股票价格...`);
+        await fetchQuotesWithRateLimit(toFetch, setStatus, setProgress, updatePrices);
+        const afterState = useStore.getState();
+        console.log("[PriceUpdater] after price fetch, holdings:", afterState.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price, revenue: h.revenue })));
+      }
+
+      const today = getETDate();
+      const currentState = useStore.getState();
+      const exists = currentState.snapshots.some((s) => s.date === today);
+      console.log("[PriceUpdater] snapshot check:", { today, exists, holdingsCount: currentState.holdings.length, optionHoldingsCount: currentState.optionHoldings.length });
+      if (!exists && (currentState.holdings.length > 0 || currentState.optionHoldings.length > 0)) {
+        console.log(`[PriceUpdater] creating today's snapshot (${today})`);
+        takeSnapshot();
+        const snapState = useStore.getState();
+        console.log("[PriceUpdater] after snapshot, snapshots:", snapState.snapshots.map((s) => ({ date: s.date, dailyReturn: s.dailyReturn })));
+        console.log("[PriceUpdater] after snapshot, dailyReturns:", snapState.dailyReturns);
+      }
+
+      setProgress(100);
+      setStatus("数据已就绪");
+      setTimeout(() => setStatus(null), 2000);
     };
 
-    loadFromRemote();
+    loadFromRemote().finally(() => {
+      setRefreshing(false);
+    });
   }, []);
+
+  // 每 5 分钟轮询：收盘后自动更新
+  useEffect(() => {
+    if (!loaded) return;
+    const interval = setInterval(async () => {
+      if (isWeekend()) return;
+      if (isAfterMarketClose() && shouldUpdateToday()) {
+        setRefreshing(true);
+        setProgress(0);
+        try {
+          const state = useStore.getState();
+          await fetchQuotesWithRateLimit(state.holdings, setStatus, setProgress, updatePrices);
+        } finally {
+          setRefreshing(false);
+        }
+      }
+    }, 300_000);
+    return () => clearInterval(interval);
+  }, [loaded, updatePrices, setRefreshing]);
 
   if (status) {
     return (
-      <div className="fixed bottom-4 right-4 z-40 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-4 py-2 text-sm shadow-lg">
-        {status}
+      <div className="fixed bottom-4 right-4 z-40 min-w-[200px] rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-4 py-3 shadow-lg">
+        <div className="mb-2 text-sm text-[var(--tv-text)]">{status}</div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--tv-border)]">
+          <div
+            className="h-full rounded-full bg-[#2962ff] transition-all duration-500 ease-out"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
       </div>
     );
   }

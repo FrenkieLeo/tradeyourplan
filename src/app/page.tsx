@@ -10,7 +10,7 @@ import TimelineSlider from "@/components/TimelineSlider";
 import PriceUpdater from "@/components/PriceUpdater";
 
 export default function Home() {
-  const { holdings, optionHoldings, loaded, syncToJsonBin } = useStore();
+  const { holdings, optionHoldings, loaded, syncToJsonBin, isRefreshing } = useStore();
 
   // 定期同步到 JSONBin
   useEffect(() => {
@@ -44,6 +44,17 @@ export default function Home() {
         </div>
       ) : (
         <>
+          {isRefreshing && (
+            <div className="sticky top-0 z-40 bg-[#2962ff]/10 border-b border-[#2962ff]/30 backdrop-blur-sm">
+              <div className="mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 py-2 text-sm text-[#2962ff]">
+                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                正在同步最新数据，请稍候...
+              </div>
+            </div>
+          )}
           <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
             <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
               <h1 className="text-lg font-bold text-[var(--tv-text)]">TradeYourPlan</h1>
