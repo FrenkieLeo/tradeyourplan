@@ -21,11 +21,11 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [loaded, syncToJsonBin]);
 
-  // 关闭页面/刷新前同步
+  // 关闭页面/刷新前同步（keepalive 确保请求在页面关闭后仍能完成）
   useEffect(() => {
     if (!loaded) return;
     const handleBeforeUnload = () => {
-      syncToJsonBin();
+      syncToJsonBin(true);
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);

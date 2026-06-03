@@ -59,7 +59,7 @@ export async function createBin<T>(data: T): Promise<string | null> {
   }
 }
 
-export async function writeData<T>(data: T): Promise<boolean> {
+export async function writeData<T>(data: T, keepalive = false): Promise<boolean> {
   try {
     const res = await fetch(`${JSONBIN_BASE}/b/${BIN_ID}`, {
       method: "PUT",
@@ -68,6 +68,7 @@ export async function writeData<T>(data: T): Promise<boolean> {
         "X-Master-Key": API_KEY,
       },
       body: JSON.stringify(data),
+      keepalive,
     });
     return res.ok;
   } catch {

@@ -53,7 +53,7 @@ interface AppState {
 
   setRefreshing: (refreshing: boolean) => void;
 
-  syncToJsonBin: () => Promise<void>;
+  syncToJsonBin: (keepalive?: boolean) => Promise<void>;
 }
 
 function calcTradeCashAdjustment(records: TradeRecord[]): number {
@@ -245,15 +245,19 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     const tradeRecords = records ?? [];
-    const tradePlans = (plans ?? []).map((p) => {
-      const old = p as TradePlan & { riskRewardRatio?: number };
-      return {
-        ...old,
-        updatedAt: old.updatedAt ?? old.createdAt,
-        cancelled: old.cancelled ?? false,
-        riskRewardWin: old.riskRewardWin ?? old.riskRewardRatio ?? 0,
-        riskRewardLose: old.riskRewardLose ?? 1,
-      };
+    const tradePlans: TradePlan[] = (plans ?? []).map((p: any) => {
+      const plan = { ...p };
+      plan.updatedAt = plan.updatedAt ?? plan.createdAt;
+      plan.cancelled = plan.cancelled ?? false;
+      plan.riskRewardWin = plan.riskRewardWin ?? plan.riskRewardRatio ?? 0;
+      plan.riskRewardLose = plan.riskRewardLose ?? 1;
+      // 迁移旧版 expectedPrice → 价格区间
+      if (plan.expectedPriceMin == null || plan.expectedPriceMax == null) {
+        plan.expectedPriceMin = plan.expectedPrice ?? 0;
+        plan.expectedPriceMax = plan.expectedPrice ?? 0;
+      }
+      delete plan.expectedPrice;
+      return plan;
     });
     const journalEntries = (journals ?? []).map((j) => {
       const old = j as JournalEntry & { targetType?: string };
@@ -522,6 +526,22 @@ export const useStore = create<AppState>((set, get) => ({
   takeSnapshot: () => {
     const { holdings, optionHoldings, cash } = get();
     const date = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
+    // 如果是全新的日期且市场未收盘，跳过快照创建（防止未开市时提前生成当日快照）
+    const existingIdx = get().snapshots.findIndex((s) => s.date === date);
+    if (existingIdx < 0) {
+      const now = new Date();
+      const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const day = et.getDay();
+      const isWeekend = day === 0 || day === 6;
+      const totalMinutes = et.getHours() * 60 + et.getMinutes();
+      const afterClose = !isWeekend && totalMinutes >= 16 * 60;
+      if (!afterClose) {
+        console.log("[takeSnapshot] skipping - market not closed yet for", date);
+        return;
+      }
+    }
+
     const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
     const totalCost = holdings.reduce((s, h) => s + h.cost, 0) + optionHoldings.reduce((s, o) => s + o.totalCost, 0);
     const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0) + optionHoldings.reduce((s, o) => s + o.revenue, 0);
@@ -539,7 +559,6 @@ export const useStore = create<AppState>((set, get) => ({
       dailyReturn: totalReturnPct,
     };
 
-    const existingIdx = get().snapshots.findIndex((s) => s.date === date);
     const isNew = existingIdx < 0;
     const snapshots = (
       existingIdx >= 0
@@ -567,7 +586,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isRefreshing: refreshing });
   },
 
-  syncToJsonBin: async () => {
+  syncToJsonBin: async (keepalive = false) => {
     const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash, holdings, optionHoldings } =
       get();
     const data = {
@@ -580,8 +599,8 @@ export const useStore = create<AppState>((set, get) => ({
       holdings,
       optionHoldings,
     };
-    const ok = await writeData(data);
-    if (ok) {
+    const ok = await writeData(data, keepalive);
+    if (ok && !keepalive) {
       await clearAllPendingSyncs();
     }
     return;

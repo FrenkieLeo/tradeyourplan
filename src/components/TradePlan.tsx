@@ -14,7 +14,8 @@ export default function TradePlan() {
       id: "",
       stockName: "",
       stockCode: "",
-      expectedPrice: 0,
+      expectedPriceMin: 0,
+      expectedPriceMax: 0,
       riskRewardWin: 0,
       riskRewardLose: 1,
       winRate: 0,
@@ -103,7 +104,11 @@ export default function TradePlan() {
               >
                 <td className={`px-3 py-3 text-sm ${plan.cancelled ? "line-through" : ""}`}>{plan.stockName || "-"}</td>
                 <td className={`px-3 py-3 text-sm text-[var(--tv-text-secondary)] ${plan.cancelled ? "line-through" : ""}`}>{plan.stockCode || "-"}</td>
-                <td className={`px-3 py-3 text-sm ${plan.cancelled ? "line-through" : ""}`}>{plan.expectedPrice ? `$${plan.expectedPrice.toFixed(2)}` : "-"}</td>
+                <td className={`px-3 py-3 text-sm ${plan.cancelled ? "line-through" : ""}`}>
+                  {plan.expectedPriceMin || plan.expectedPriceMax
+                    ? `$${plan.expectedPriceMin.toFixed(2)} ~ $${plan.expectedPriceMax.toFixed(2)}`
+                    : "-"}
+                </td>
                 <td className={`px-3 py-3 text-sm ${plan.cancelled ? "line-through" : ""}`}>{plan.riskRewardWin || plan.riskRewardLose ? `${plan.riskRewardWin}:${plan.riskRewardLose}` : "-"}</td>
                 <td className={`px-3 py-3 text-sm ${plan.cancelled ? "line-through" : ""}`}>{plan.winRate ? `${plan.winRate}%` : "-"}</td>
                 <td className={`max-w-[200px] truncate px-3 py-3 text-sm ${plan.cancelled ? "line-through text-[var(--tv-text-secondary)]" : "text-[var(--tv-text-secondary)]"}`}>
@@ -194,15 +199,26 @@ export default function TradePlan() {
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="mb-1 block text-xs text-[var(--tv-text-secondary)]">预计价格</label>
-                  <input
-                    value={editingPlan.expectedPrice || ""}
-                    onChange={(e) => setEditingPlan({ ...editingPlan, expectedPrice: parseFloat(e.target.value) || 0 })}
-                    className="w-full rounded px-3 py-2 text-sm"
-                    type="number"
-                    step="0.01"
-                    placeholder="$0"
-                  />
+                  <label className="mb-1 block text-xs text-[var(--tv-text-secondary)]">预计价格区间</label>
+                  <div className="flex items-center gap-1">
+                    <input
+                      value={editingPlan.expectedPriceMin || ""}
+                      onChange={(e) => setEditingPlan({ ...editingPlan, expectedPriceMin: parseFloat(e.target.value) || 0 })}
+                      className="w-full rounded px-3 py-2 text-sm"
+                      type="number"
+                      step="0.01"
+                      placeholder="最低价"
+                    />
+                    <span className="text-sm text-[var(--tv-text-secondary)]">~</span>
+                    <input
+                      value={editingPlan.expectedPriceMax || ""}
+                      onChange={(e) => setEditingPlan({ ...editingPlan, expectedPriceMax: parseFloat(e.target.value) || 0 })}
+                      className="w-full rounded px-3 py-2 text-sm"
+                      type="number"
+                      step="0.01"
+                      placeholder="最高价"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-[var(--tv-text-secondary)]">盈亏比</label>

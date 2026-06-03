@@ -68,7 +68,8 @@ export interface TradePlan {
   id: string;
   stockName: string;
   stockCode: string;
-  expectedPrice: number;
+  expectedPriceMin: number;
+  expectedPriceMax: number;
   riskRewardWin: number;
   riskRewardLose: number;
   winRate: number;

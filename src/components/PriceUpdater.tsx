@@ -16,6 +16,8 @@ import type {
 } from "@/types";
 
 const LAST_UPDATE_KEY = "lastPriceUpdateDate";
+const LAST_UPDATE_TS_KEY = "lastPriceUpdateTs";
+const UPDATE_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 小时冷却，避免时区导致漏拉
 const API_DELAY_MS = 14_000;
 
 async function fetchQuotesWithRateLimit(
@@ -44,6 +46,7 @@ async function fetchQuotesWithRateLimit(
   if (updates.length > 0) {
     updatePrices(updates);
     localStorage.setItem(LAST_UPDATE_KEY, getETDate());
+    localStorage.setItem(LAST_UPDATE_TS_KEY, String(Date.now()));
     setStatus(`已更新 ${updates.length} 只股票价格`);
   } else {
     setStatus("未能获取到价格数据");
@@ -60,7 +63,12 @@ export default function PriceUpdater() {
   const shouldUpdateToday = useCallback(() => {
     const today = getETDate();
     const lastUpdate = localStorage.getItem(LAST_UPDATE_KEY);
-    return lastUpdate !== today;
+    // ① ET 日期不同 → 需要更新
+    if (lastUpdate !== today) return true;
+    // ② ET 日期相同，但上次拉取超过 2 小时（解决中国时区 ET 日期不变但价格已变的问题）
+    const lastTs = localStorage.getItem(LAST_UPDATE_TS_KEY);
+    if (!lastTs) return true;
+    return Date.now() - Number(lastTs) > UPDATE_COOLDOWN_MS;
   }, []);
 
   // 单次初始化流程：加载远程 → 初始化 → 获取价格 → 快照
@@ -99,21 +107,21 @@ export default function PriceUpdater() {
         });
 
         if (remote) {
+          // 过滤未来数据仅用于本地展示，但不写回 JSONBin（防止因时区/时钟偏差误删）
+          // JSONBin 只由 syncToJsonBin（用户操作/定时同步）写入
           const today = getETDate();
-          const cleanedSnapshots = (remote.snapshots ?? []).filter((s) => s.date <= today);
-          const cleanedReturns = (remote.dailyReturns ?? []).filter((d) => d.date <= today);
-          if (cleanedSnapshots.length !== (remote.snapshots?.length ?? 0) || cleanedReturns.length !== (remote.dailyReturns?.length ?? 0)) {
-            console.log("[PriceUpdater] cleaning future/wrong snapshots", {
-              before: remote.snapshots?.length, after: cleanedSnapshots.length,
-              removed: (remote.snapshots ?? []).filter((s) => s.date > today).map((s) => s.date),
-            });
-            remote.snapshots = cleanedSnapshots;
-            remote.dailyReturns = cleanedReturns;
-            try {
-              const { writeData } = await import("@/lib/jsonbin");
-              await writeData(remote);
-            } catch { /* best-effort */ }
+          // 用 1 天缓冲避免时区边缘情况误删数据
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const maxAllowed = tomorrow.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+          const cleanedSnapshots = (remote.snapshots ?? []).filter((s) => s.date <= maxAllowed);
+          const cleanedReturns = (remote.dailyReturns ?? []).filter((d) => d.date <= maxAllowed);
+          if (cleanedSnapshots.length !== (remote.snapshots?.length ?? 0)) {
+            const removed = (remote.snapshots ?? []).filter((s) => s.date > maxAllowed).map((s) => s.date);
+            console.warn("[PriceUpdater] filtering far-future snapshots in-app only (not removing from JSONBin):", removed);
           }
+          remote.snapshots = cleanedSnapshots;
+          remote.dailyReturns = cleanedReturns;
 
           if (remote.holdings?.length) {
             console.log("[PriceUpdater] writing remote.holdings to IndexedDB:", remote.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })));
@@ -172,7 +180,8 @@ export default function PriceUpdater() {
       console.log("[PriceUpdater] after initialize, snapshots:", state.snapshots.map((s) => ({ date: s.date, dailyReturn: s.dailyReturn, holdings: s.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice })) })));
 
       const uninitialized = state.holdings.filter((h) => h.nowPrice === h.price);
-      const staleLastUpdate = !isWeekend() && shouldUpdateToday();
+      // 只在美股收盘后才拉取新一天的价格（防止未开市时提前拉取）
+      const staleLastUpdate = !isWeekend() && isAfterMarketClose() && shouldUpdateToday();
       console.log("[PriceUpdater] uninitialized count:", uninitialized.length, "staleLastUpdate:", staleLastUpdate, "details:", uninitialized.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })));
 
       const needFetch = uninitialized.length > 0 || (staleLastUpdate && state.holdings.length > 0);
@@ -188,7 +197,8 @@ export default function PriceUpdater() {
       const currentState = useStore.getState();
       const exists = currentState.snapshots.some((s) => s.date === today);
       console.log("[PriceUpdater] snapshot check:", { today, exists, holdingsCount: currentState.holdings.length, optionHoldingsCount: currentState.optionHoldings.length });
-      if (!exists && (currentState.holdings.length > 0 || currentState.optionHoldings.length > 0)) {
+      // 只在美股收盘后自动创建当日快照（防止未开市时提前生成）
+      if (!exists && isAfterMarketClose() && (currentState.holdings.length > 0 || currentState.optionHoldings.length > 0)) {
         console.log(`[PriceUpdater] creating today's snapshot (${today})`);
         takeSnapshot();
         const snapState = useStore.getState();
