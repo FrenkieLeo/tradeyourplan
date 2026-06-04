@@ -592,7 +592,6 @@ export const useStore = create<AppState>((set, get) => ({
     set({ holdings: calcRevenue(holdings) });
     setItem("holdings", holdings);
     markPendingSync("holdings", holdings);
-    get().takeSnapshot();
   },
 
   updateOptionPremiums: (updates) => {
@@ -604,7 +603,6 @@ export const useStore = create<AppState>((set, get) => ({
     set({ optionHoldings: calcOptionRevenue(optionHoldings) });
     setItem("optionHoldings", optionHoldings);
     markPendingSync("optionHoldings", optionHoldings);
-    get().takeSnapshot();
   },
 
   updateOptionHolding: (id, partial) => {
@@ -623,7 +621,6 @@ export const useStore = create<AppState>((set, get) => ({
     set({ optionHoldings });
     setItem("optionHoldings", optionHoldings);
     markPendingSync("optionHoldings", optionHoldings);
-    get().takeSnapshot();
   },
 
   updateCash: (total) => {
