@@ -12,24 +12,7 @@ import PriceUpdater from "@/components/PriceUpdater";
 export default function Home() {
   const { holdings, optionHoldings, loaded, syncToJsonBin, isRefreshing } = useStore();
 
-  // 定期同步到 JSONBin
-  useEffect(() => {
-    if (!loaded) return;
-    const interval = setInterval(() => {
-      syncToJsonBin();
-    }, 5 * 60 * 1000); // 每 5 分钟同步一次
-    return () => clearInterval(interval);
-  }, [loaded, syncToJsonBin]);
-
-  // 关闭页面/刷新前同步（keepalive 确保请求在页面关闭后仍能完成）
-  useEffect(() => {
-    if (!loaded) return;
-    const handleBeforeUnload = () => {
-      syncToJsonBin(true);
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [loaded, syncToJsonBin]);
+  // 同步仅由 PriceEditModal 保存后触发；不再自动覆盖 JSONBin
 
   return (
     <div className="min-h-screen bg-[var(--tv-bg)]">
