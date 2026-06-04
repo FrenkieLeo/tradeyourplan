@@ -64,6 +64,11 @@ export interface PortfolioSnapshot {
   dailyReturn: number;
 }
 
+export interface DailyPricePoint {
+  date: string;
+  return: number;
+}
+
 export interface TradePlan {
   id: string;
   stockName: string;

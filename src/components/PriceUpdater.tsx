@@ -12,6 +12,7 @@ import type {
   TradePlan,
   JournalEntry,
   PortfolioSnapshot,
+  DailyPricePoint,
 } from "@/types";
 
 export default function PriceUpdater() {
@@ -32,6 +33,7 @@ export default function PriceUpdater() {
           tradePlans: TradePlan[];
           journalEntries: JournalEntry[];
           snapshots: PortfolioSnapshot[];
+          dailyReturns?: DailyPricePoint[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
           baseCash?: number;
@@ -69,6 +71,7 @@ export default function PriceUpdater() {
           if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
           if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
           if (remote.snapshots !== undefined) await setItem("snapshots", remote.snapshots);
+          if (remote.dailyReturns !== undefined) await setItem("dailyReturns", remote.dailyReturns);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
         } else {
           const newBinId = await createBin({
