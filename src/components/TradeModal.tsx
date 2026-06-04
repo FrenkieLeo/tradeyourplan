@@ -293,13 +293,13 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
                     <td className="py-3 text-right text-[var(--tv-text-secondary)]">{h.id}</td>
                     <td className="py-3 text-right">{h.number}</td>
                     <td className="py-3 text-right">${h.price.toFixed(2)}</td>
-                    <td className="py-3 text-right">${h.nowPrice.toFixed(2)}</td>
-                    <td className="py-3 text-right">${h.total.toLocaleString()}</td>
+                    <td className="py-3 text-right">{h.nowPrice === 0 ? '--' : `$${h.nowPrice.toFixed(2)}`}</td>
+                    <td className="py-3 text-right">{h.total === 0 ? '--' : `$${h.total.toLocaleString()}`}</td>
                     <td className={`py-3 text-right ${h.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                      {h.revenue >= 0 ? "+" : ""}${h.revenue.toLocaleString()}
+                      {h.nowPrice === 0 ? '--' : `${h.revenue >= 0 ? "+" : ""}$${h.revenue.toLocaleString()}`}
                     </td>
                     <td className={`py-3 text-right ${h.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                      {h.revenuePercentage >= 0 ? "+" : ""}{h.revenuePercentage}%
+                      {h.nowPrice === 0 ? '--' : `${h.revenuePercentage >= 0 ? "+" : ""}${h.revenuePercentage}%`}
                     </td>
                   </tr>
                 ))}

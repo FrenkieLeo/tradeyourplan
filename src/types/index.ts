@@ -79,9 +79,4 @@ export interface TradePlan {
   cancelled: boolean;
 }
 
-export interface DailyPricePoint {
-  date: string;
-  return: number;
-}
-
 

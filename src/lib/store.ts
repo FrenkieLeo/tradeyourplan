@@ -7,7 +7,6 @@ import type {
   JournalEntry,
   PortfolioSnapshot,
   TradePlan,
-  DailyPricePoint,
 } from "@/types";
 import { getItem, setItem, markPendingSync, clearAllPendingSyncs } from "./db";
 import { writeData } from "./jsonbin";
@@ -24,7 +23,6 @@ interface AppState {
   journalEntries: JournalEntry[];
 
   snapshots: PortfolioSnapshot[];
-  dailyReturns: DailyPricePoint[];
   activeSnapshotIndex: number | null;
 
   loaded: boolean;
@@ -120,8 +118,8 @@ function recalcHoldings(
       number: entry.totalNumber,
       price: entry.totalCost,
       cost: entry.totalCost * entry.totalNumber,
-      nowPrice: entry.totalCost,
-      total: entry.totalCost * entry.totalNumber,
+      nowPrice: 0,
+      total: 0,
       revenue: 0,
       revenuePercentage: 0,
     });
@@ -182,8 +180,8 @@ function recalcOptionHoldings(records: TradeRecord[]): OptionHolding[] {
       contracts: entry.contracts,
       averagePremium: entry.averagePremium,
       totalCost,
-      nowPremium: entry.averagePremium,
-      currentValue: totalCost,
+      nowPremium: 0,
+      currentValue: 0,
       revenue: 0,
       revenuePercentage: 0,
     });
@@ -194,6 +192,9 @@ function recalcOptionHoldings(records: TradeRecord[]): OptionHolding[] {
 
 function calcOptionRevenue(options: OptionHolding[]): OptionHolding[] {
   return options.map((o) => {
+    if (o.nowPremium === 0) {
+      return { ...o, currentValue: 0, revenue: 0, revenuePercentage: 0 };
+    }
     const currentValue = o.nowPremium * o.contracts * 100;
     const revenue = currentValue - o.totalCost;
     const revenuePercentage =
@@ -204,6 +205,9 @@ function calcOptionRevenue(options: OptionHolding[]): OptionHolding[] {
 
 function calcRevenue(holdings: StockHolding[]): StockHolding[] {
   return holdings.map((h) => {
+    if (h.nowPrice === 0) {
+      return { ...h, total: 0, revenue: 0, revenuePercentage: 0 };
+    }
     const total = h.nowPrice * h.number;
     const revenue = total - h.cost;
     const revenuePercentage =
@@ -361,18 +365,16 @@ export const useStore = create<AppState>((set, get) => ({
   tradePlans: [],
   journalEntries: [],
   snapshots: [],
-  dailyReturns: [],
   activeSnapshotIndex: null,
   loaded: false,
   isRefreshing: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, returns, storedBaseCash, storedHoldings, storedOptionHoldings] = await Promise.all([
+    const [records, plans, journals, snaps, storedBaseCash, storedHoldings, storedOptionHoldings] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
       getItem<JournalEntry[]>("journalEntries"),
       getItem<PortfolioSnapshot[]>("snapshots"),
-      getItem<DailyPricePoint[]>("dailyReturns"),
       getItem<number>("baseCash"),
       getItem<StockHolding[]>("holdings"),
       getItem<OptionHolding[]>("optionHoldings"),
@@ -381,7 +383,6 @@ export const useStore = create<AppState>((set, get) => ({
     console.log("[initialize] raw data from IndexedDB:", {
       records: records?.length ?? 0,
       snaps: snaps?.length ?? 0,
-      returns: returns?.length ?? 0,
       storedHoldings: storedHoldings?.length ?? 0,
       storedOptionHoldings: storedOptionHoldings?.length ?? 0,
     });
@@ -414,13 +415,6 @@ export const useStore = create<AppState>((set, get) => ({
       .sort((a, b) => a.date.localeCompare(b.date));
     const baseCash = storedBaseCash ?? 10000;
 
-    const rawReturns = returns ?? [];
-    const dedupedMap = new Map<string, { date: string; return: number }>();
-    for (const d of rawReturns) {
-      dedupedMap.set(d.date, d);
-    }
-    const dailyReturns = [...dedupedMap.values()].sort((a, b) => a.date.localeCompare(b.date));
-
     const holdings = recalcHoldings(tradeRecords);
     const optionHoldings = recalcOptionHoldings(tradeRecords);
 
@@ -433,38 +427,16 @@ export const useStore = create<AppState>((set, get) => ({
     const cashAdj = calcTradeCashAdjustment(tradeRecords);
     const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + cashAdj };
 
-    if (storedHoldings && storedHoldings.length > 0) {
-      console.log("[initialize] restoring nowPrice from storedHoldings", storedHoldings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price, total: h.total })));
-      for (const h of holdings) {
-        const stored = storedHoldings.find((s) => s.id === h.id);
-        if (stored && stored.nowPrice > 0) {
-          h.nowPrice = stored.nowPrice;
-        }
-      }
-    } else if (snapshots.length > 0) {
+    if (snapshots.length > 0) {
       const latest = snapshots[snapshots.length - 1];
-      console.log("[initialize] storedHoldings empty, restoring nowPrice from latest snapshot", { snapshotDate: latest.date, holdings: latest.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })) });
+      console.log("[initialize] restoring nowPrice from latest snapshot", { snapshotDate: latest.date, holdings: latest.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })) });
       for (const h of holdings) {
         const snap = latest.holdings.find((s) => s.id === h.id);
         if (snap && snap.nowPrice > 0) {
           h.nowPrice = snap.nowPrice;
         }
       }
-    } else {
-      console.log("[initialize] no storedHoldings AND no snapshots — nowPrice stays at cost basis");
-    }
-
-    if (storedOptionHoldings && storedOptionHoldings.length > 0) {
-      console.log("[initialize] restoring nowPremium from storedOptionHoldings", storedOptionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })));
-      for (const o of optionHoldings) {
-        const stored = storedOptionHoldings.find((s) => s.id === o.id);
-        if (stored && stored.nowPremium > 0) {
-          o.nowPremium = stored.nowPremium;
-        }
-      }
-    } else if (snapshots.length > 0) {
-      const latest = snapshots[snapshots.length - 1];
-      console.log("[initialize] storedOptionHoldings empty, restoring nowPremium from latest snapshot", { snapshotDate: latest.date, options: latest.optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })) });
+      console.log("[initialize] restoring nowPremium from latest snapshot", { snapshotDate: latest.date, options: latest.optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })) });
       for (const o of optionHoldings) {
         const snap = latest.optionHoldings.find((s) => s.id === o.id);
         if (snap && snap.nowPremium > 0) {
@@ -472,7 +444,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
     } else {
-      console.log("[initialize] no storedOptionHoldings AND no snapshots — nowPremium stays at cost");
+      console.log("[initialize] no snapshots — nowPrice/nowPremium stays at 0 (no data)");
     }
 
     console.log("[initialize] final holdings before set:", holdings.map((h) => ({ id: h.id, name: h.name, number: h.number, price: h.price, nowPrice: h.nowPrice, cost: h.cost, total: h.price * h.number, totalWithNowPrice: h.nowPrice * h.number, revenue: (h.nowPrice * h.number) - h.cost })));
@@ -483,7 +455,6 @@ export const useStore = create<AppState>((set, get) => ({
       tradePlans,
       journalEntries,
       snapshots,
-      dailyReturns,
       baseCash,
       holdings: calcRevenue(holdings),
       optionHoldings: calcOptionRevenue(optionHoldings),
@@ -518,6 +489,7 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
     get().takeSnapshot();
+    get().syncToJsonBin();
   },
 
   removeTradeRecord: (tradeTime, id) => {
@@ -552,6 +524,7 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
     get().takeSnapshot();
+    get().syncToJsonBin();
   },
 
   updateTradeRecord: (oldTradeTime, oldId, record) => {
@@ -581,6 +554,7 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("tradeRecords", records);
     markPendingSync("tradeRecords", records);
     get().takeSnapshot();
+    get().syncToJsonBin();
   },
 
   updatePrices: (updates) => {
@@ -592,6 +566,30 @@ export const useStore = create<AppState>((set, get) => ({
     set({ holdings: calcRevenue(holdings) });
     setItem("holdings", holdings);
     markPendingSync("holdings", holdings);
+
+    const { snapshots } = get();
+    if (snapshots.length > 0) {
+      const idx = snapshots.length - 1;
+      const latest = { ...snapshots[idx] };
+      let changed = false;
+      for (const u of updates) {
+        const hIdx = latest.holdings.findIndex((h) => h.id === u.id);
+        if (hIdx >= 0) {
+          latest.holdings = [...latest.holdings];
+          latest.holdings[hIdx] = stockWithPrice(latest.holdings[hIdx], u.nowPrice);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const updated = recalcSnapshotDerived(latest);
+        const newSnapshots = [...snapshots];
+        newSnapshots[idx] = updated;
+        set({ snapshots: newSnapshots });
+        setItem("snapshots", newSnapshots);
+        markPendingSync("snapshots", newSnapshots);
+      }
+    }
+    get().syncToJsonBin();
   },
 
   updateOptionPremiums: (updates) => {
@@ -603,6 +601,30 @@ export const useStore = create<AppState>((set, get) => ({
     set({ optionHoldings: calcOptionRevenue(optionHoldings) });
     setItem("optionHoldings", optionHoldings);
     markPendingSync("optionHoldings", optionHoldings);
+
+    const { snapshots } = get();
+    if (snapshots.length > 0) {
+      const idx = snapshots.length - 1;
+      const latest = { ...snapshots[idx] };
+      let changed = false;
+      for (const u of updates) {
+        const oIdx = latest.optionHoldings.findIndex((o) => o.id === u.id);
+        if (oIdx >= 0) {
+          latest.optionHoldings = [...latest.optionHoldings];
+          latest.optionHoldings[oIdx] = optionWithPremium(latest.optionHoldings[oIdx], u.nowPremium);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const updated = recalcSnapshotDerived(latest);
+        const newSnapshots = [...snapshots];
+        newSnapshots[idx] = updated;
+        set({ snapshots: newSnapshots });
+        setItem("snapshots", newSnapshots);
+        markPendingSync("snapshots", newSnapshots);
+      }
+    }
+    get().syncToJsonBin();
   },
 
   updateOptionHolding: (id, partial) => {
@@ -630,6 +652,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ baseCash, cash });
     setItem("baseCash", baseCash);
     markPendingSync("baseCash", baseCash);
+    get().syncToJsonBin();
   },
 
   addTradePlan: (plan) => {
@@ -706,14 +729,6 @@ export const useStore = create<AppState>((set, get) => ({
     set({ snapshots, activeSnapshotIndex: isNew ? null : get().activeSnapshotIndex });
     setItem("snapshots", snapshots);
     markPendingSync("snapshots", snapshots);
-
-    const dailyReturns = [
-      ...get().dailyReturns.filter((d) => d.date !== date),
-      { date, return: totalRevenue },
-    ].sort((a, b) => a.date.localeCompare(b.date));
-    set({ dailyReturns });
-    setItem("dailyReturns", dailyReturns);
-    markPendingSync("dailyReturns", dailyReturns);
   },
 
   updateHistoricalPrices: (updates) => {
@@ -775,30 +790,14 @@ export const useStore = create<AppState>((set, get) => ({
     }
     snapshots.sort((a, b) => a.date.localeCompare(b.date));
 
-    const dailyReturns = [...get().dailyReturns];
-    for (const date of affectedDates) {
-      const snap = snapshots.find((s) => s.date === date);
-      if (!snap) continue;
-      const totalRevenue = snap.holdings.reduce((s, h) => s + h.revenue, 0) + snap.optionHoldings.reduce((s, o) => s + o.revenue, 0);
-      const idx = dailyReturns.findIndex((d) => d.date === date);
-      if (idx >= 0) {
-        dailyReturns[idx] = { date, return: totalRevenue };
-      } else {
-        dailyReturns.push({ date, return: totalRevenue });
-      }
-    }
-    dailyReturns.sort((a, b) => a.date.localeCompare(b.date));
-
-    set({ snapshots, dailyReturns });
+    set({ snapshots });
     setItem("snapshots", snapshots);
     markPendingSync("snapshots", snapshots);
-    setItem("dailyReturns", dailyReturns);
-    markPendingSync("dailyReturns", dailyReturns);
 
-    // 如果最新快照的日期在本次修改范围内，将最新收盘价同步到当前持仓显示
+    // 将最新快照的收盘价同步到当前持仓显示
     const sortedSnapshots = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
     const latest = sortedSnapshots[sortedSnapshots.length - 1];
-    if (latest && affectedDates.has(latest.date)) {
+    if (latest) {
       const currentHoldings = get().holdings.map((h) => {
         const snapH = latest.holdings.find((sh) => sh.id === h.id);
         return snapH ? { ...snapH } : h;
@@ -816,17 +815,43 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteSnapshot: (date) => {
-    const snapshots = get().snapshots.filter((s) => s.date !== date);
-    const dailyReturns = get().dailyReturns.filter((d) => d.date !== date);
+    const { snapshots: oldSnapshots, holdings: oldHoldings, optionHoldings: oldOptionHoldings } = get();
+    const snapshots = oldSnapshots.filter((s) => s.date !== date);
     const activeSnapshotIndex = get().activeSnapshotIndex;
     const newIndex = activeSnapshotIndex !== null && activeSnapshotIndex >= snapshots.length
       ? (snapshots.length > 0 ? snapshots.length - 1 : null)
       : activeSnapshotIndex;
-    set({ snapshots, dailyReturns, activeSnapshotIndex: newIndex });
+    set({ snapshots, activeSnapshotIndex: newIndex });
     setItem("snapshots", snapshots);
     markPendingSync("snapshots", snapshots);
-    setItem("dailyReturns", dailyReturns);
-    markPendingSync("dailyReturns", dailyReturns);
+
+    const wasLatest = oldSnapshots.length > 0 && oldSnapshots[oldSnapshots.length - 1].date === date;
+    if (wasLatest && snapshots.length > 0) {
+      const newLatest = snapshots[snapshots.length - 1];
+      const holdings = oldHoldings.map((h) => {
+        const snapH = newLatest.holdings.find((sh) => sh.id === h.id);
+        return snapH ? { ...snapH } : h;
+      });
+      const optionHoldings = oldOptionHoldings.map((o) => {
+        const snapO = newLatest.optionHoldings.find((so) => so.id === o.id);
+        return snapO ? { ...snapO } : o;
+      });
+      set({ holdings, optionHoldings });
+      setItem("holdings", holdings);
+      markPendingSync("holdings", holdings);
+      setItem("optionHoldings", optionHoldings);
+      markPendingSync("optionHoldings", optionHoldings);
+    } else if (snapshots.length === 0) {
+      const h0 = calcRevenue(oldHoldings.map((h) => ({ ...h, nowPrice: 0 })));
+      const o0 = calcOptionRevenue(oldOptionHoldings.map((o) => ({ ...o, nowPremium: 0 })));
+      set({ holdings: h0, optionHoldings: o0 });
+      setItem("holdings", h0);
+      markPendingSync("holdings", h0);
+      setItem("optionHoldings", o0);
+      markPendingSync("optionHoldings", o0);
+    }
+
+    get().syncToJsonBin();
   },
 
   setActiveSnapshot: (index) => {
@@ -838,14 +863,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncToJsonBin: async (keepalive = false) => {
-    const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash, holdings, optionHoldings } =
+    const { tradeRecords, tradePlans, journalEntries, snapshots, baseCash, holdings, optionHoldings } =
       get();
     const data = {
       tradeRecords,
       tradePlans,
       journalEntries,
       snapshots,
-      dailyReturns,
       baseCash,
       holdings,
       optionHoldings,

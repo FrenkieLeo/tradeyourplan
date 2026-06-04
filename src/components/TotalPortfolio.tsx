@@ -10,7 +10,7 @@ import PriceEditModal from "./PriceEditModal";
 export default function TotalPortfolio() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { holdings, optionHoldings, cash, dailyReturns, activeSnapshotIndex, snapshots, isRefreshing } = useStore();
+  const { holdings, optionHoldings, cash, activeSnapshotIndex, snapshots, isRefreshing } = useStore();
   const [modalOpen, setModalOpen] = useState(false);
   const [cashModalOpen, setCashModalOpen] = useState(false);
   const [priceEditOpen, setPriceEditOpen] = useState(false);
@@ -51,8 +51,12 @@ export default function TotalPortfolio() {
       });
     }
 
-    const dates = dailyReturns.map((d) => d.date.slice(5));
-    const values = dailyReturns.map((d) => d.return);
+    const dates = snapshots.map((s) => s.date.slice(5));
+    const values = snapshots.map((s) => {
+      const stockRev = s.holdings.reduce((sum, h) => sum + h.revenue, 0);
+      const optionRev = s.optionHoldings.reduce((sum, o) => sum + o.revenue, 0);
+      return stockRev + optionRev;
+    });
 
     const hasManyPoints = dates.length > 30;
 
@@ -132,7 +136,7 @@ export default function TotalPortfolio() {
     const handleResize = () => chartInstance.current?.resize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [dailyReturns, isRefreshing]);
+  }, [snapshots, isRefreshing]);
 
   return (
     <>
@@ -193,7 +197,7 @@ export default function TotalPortfolio() {
             </div>
 
             {/* 图表 */}
-            {dailyReturns.length === 0 ? (
+            {snapshots.length === 0 ? (
               <div className="flex h-48 w-full items-center justify-center text-sm text-[var(--tv-text-secondary)]">
                 {holdings.length > 0 ? "正在获取价格数据..." : "暂无持仓数据"}
               </div>

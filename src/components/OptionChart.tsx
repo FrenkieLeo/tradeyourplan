@@ -175,10 +175,10 @@ export default function OptionChart({ option }: OptionChartProps) {
                 </button>
                 <div className="text-right">
                   <div className={`text-sm font-medium ${displayOption.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                    {displayOption.revenuePercentage >= 0 ? "+" : ""}{displayOption.revenuePercentage}%
+                    {displayOption.nowPremium === 0 ? '--' : `${displayOption.revenuePercentage >= 0 ? "+" : ""}${displayOption.revenuePercentage}%`}
                   </div>
                   <div className={`text-xs ${displayOption.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                    {displayOption.revenue >= 0 ? "+" : ""}${displayOption.revenue.toLocaleString()}
+                    {displayOption.nowPremium === 0 ? '--' : `${displayOption.revenue >= 0 ? "+" : ""}$${displayOption.revenue.toLocaleString()}`}
                   </div>
                 </div>
               </div>
@@ -192,8 +192,8 @@ export default function OptionChart({ option }: OptionChartProps) {
                 <span>到期: {displayOption.expirationDate}</span>
                 <span>持仓: {displayOption.contracts} 张</span>
                 <span>成本: ${displayOption.averagePremium.toFixed(2)}</span>
-                <span className="text-[var(--tv-accent)] font-medium">现价: ${displayOption.nowPremium.toFixed(2)}</span>
-                <span>价值: ${displayOption.currentValue.toLocaleString()}</span>
+                <span className="text-[var(--tv-accent)] font-medium">现价: {displayOption.nowPremium === 0 ? '--' : `$${displayOption.nowPremium.toFixed(2)}`}</span>
+                <span>价值: {displayOption.currentValue === 0 ? '--' : `$${displayOption.currentValue.toLocaleString()}`}</span>
               </div>
               <div className="mt-1 text-xs text-[var(--tv-accent)]/60">点击更新最新权利金</div>
             </div>

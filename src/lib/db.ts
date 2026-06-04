@@ -68,17 +68,6 @@ export async function markPendingSync(key: string, data: unknown): Promise<void>
   });
 }
 
-export async function getPendingSyncs(): Promise<PendingSync[]> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("pendingSync", "readonly");
-    const store = tx.objectStore("pendingSync");
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
 export async function clearPendingSync(key: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {

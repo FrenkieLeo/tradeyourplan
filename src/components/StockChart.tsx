@@ -182,18 +182,18 @@ export default function StockChart({ holding }: StockChartProps) {
               </div>
               <div className="text-right">
                 <div className={`text-sm font-medium ${displayHolding.revenuePercentage >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                  {displayHolding.revenuePercentage >= 0 ? "+" : ""}{displayHolding.revenuePercentage}%
+                  {displayHolding.nowPrice === 0 ? '--' : `${displayHolding.revenuePercentage >= 0 ? "+" : ""}${displayHolding.revenuePercentage}%`}
                 </div>
                 <div className={`text-xs ${displayHolding.revenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
-                  {displayHolding.revenue >= 0 ? "+" : ""}${displayHolding.revenue.toLocaleString()}
+                  {displayHolding.nowPrice === 0 ? '--' : `${displayHolding.revenue >= 0 ? "+" : ""}$${displayHolding.revenue.toLocaleString()}`}
                 </div>
               </div>
             </div>
             <div className="mb-2 flex gap-4 text-xs text-[var(--tv-text-secondary)]">
               <span>持仓: {displayHolding.number} 股</span>
               <span>成本: ${displayHolding.price.toFixed(2)}</span>
-              <span>现价: ${displayHolding.nowPrice.toFixed(2)}</span>
-              <span>市值: ${displayHolding.total.toLocaleString()}</span>
+              <span>现价: {displayHolding.nowPrice === 0 ? '--' : `$${displayHolding.nowPrice.toFixed(2)}`}</span>
+              <span>市值: {displayHolding.total === 0 ? '--' : `$${displayHolding.total.toLocaleString()}`}</span>
             </div>
             <div ref={chartRef} className="h-36 w-full" />
           </>
