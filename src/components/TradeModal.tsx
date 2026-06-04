@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
-import { fetchQuote } from "@/lib/alphavantage";
 import type { TradeRecord, StockHolding, OptionHolding } from "@/types";
 
 interface TradeModalProps {
@@ -13,7 +12,7 @@ interface TradeModalProps {
 type TabType = "STOCK" | "OPTION";
 
 export default function TradeModal({ open, onClose }: TradeModalProps) {
-  const { holdings, optionHoldings, tradeRecords, cash, addTradeRecord, removeTradeRecord, updateTradeRecord, updatePrices } =
+  const { holdings, optionHoldings, tradeRecords, cash, addTradeRecord, removeTradeRecord, updateTradeRecord } =
     useStore();
 
   const [tab, setTab] = useState<TabType>("STOCK");
@@ -109,11 +108,6 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       updateTradeRecord(editingTime, editingId, record);
     } else {
       addTradeRecord(record);
-    }
-
-    const quote = await fetchQuote(code);
-    if (quote && quote.price > 0) {
-      updatePrices([{ id: code, nowPrice: quote.price }]);
     }
 
     setStockName("");
