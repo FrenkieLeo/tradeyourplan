@@ -110,15 +110,20 @@ export default function PriceUpdater() {
           // 过滤未来数据仅用于本地展示，但不写回 JSONBin（防止因时区/时钟偏差误删）
           // JSONBin 只由 syncToJsonBin（用户操作/定时同步）写入
           const today = getETDate();
-          // 用 1 天缓冲避免时区边缘情况误删数据
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          const maxAllowed = tomorrow.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-          const cleanedSnapshots = (remote.snapshots ?? []).filter((s) => s.date <= maxAllowed);
-          const cleanedReturns = (remote.dailyReturns ?? []).filter((d) => d.date <= maxAllowed);
+          const [y, m, d] = today.split("-").map(Number);
+          const future = new Date(Date.UTC(y, m - 1, d + 2));
+          const maxAllowed = future.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+          let cleanedSnapshots = (remote.snapshots ?? []).filter((s) => s.date <= maxAllowed);
+          let cleanedReturns = (remote.dailyReturns ?? []).filter((d) => d.date <= maxAllowed);
           if (cleanedSnapshots.length !== (remote.snapshots?.length ?? 0)) {
             const removed = (remote.snapshots ?? []).filter((s) => s.date > maxAllowed).map((s) => s.date);
             console.warn("[PriceUpdater] filtering far-future snapshots in-app only (not removing from JSONBin):", removed);
+          }
+          // 如果市场未收盘，移除当日的快照和收益数据（防止之前错误生成的当日数据污染本地状态）
+          if (!isAfterMarketClose() && !isWeekend()) {
+            cleanedSnapshots = cleanedSnapshots.filter((s) => s.date !== today);
+            cleanedReturns = cleanedReturns.filter((d) => d.date !== today);
+            console.log(`[PriceUpdater] market not closed, removed premature ${today} data`);
           }
           remote.snapshots = cleanedSnapshots;
           remote.dailyReturns = cleanedReturns;

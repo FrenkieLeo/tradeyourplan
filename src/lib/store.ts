@@ -49,6 +49,8 @@ interface AppState {
   addJournalEntry: (entry: JournalEntry) => void;
 
   takeSnapshot: () => void;
+  updateHistoricalPrices: (updates: { date: string; id: string; value: number; type?: "stock" | "option" }[]) => void;
+  deleteSnapshot: (date: string) => void;
   setActiveSnapshot: (index: number | null) => void;
 
   setRefreshing: (refreshing: boolean) => void;
@@ -208,6 +210,146 @@ function calcRevenue(holdings: StockHolding[]): StockHolding[] {
       h.cost > 0 ? parseFloat(((revenue / h.cost) * 100).toFixed(2)) : 0;
     return { ...h, total, revenue, revenuePercentage };
   });
+}
+
+function findSourceStock(
+  snapshots: PortfolioSnapshot[],
+  currentHoldings: StockHolding[],
+  targetDate: string,
+  id: string,
+): StockHolding | null {
+  const fromCurrent = currentHoldings.find((h) => h.id === id);
+  if (fromCurrent) return fromCurrent;
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const before = [...sorted].reverse().find((s) => s.date < targetDate && s.holdings.some((h) => h.id === id));
+  if (before) return before.holdings.find((h) => h.id === id)!;
+  const after = sorted.find((s) => s.date > targetDate && s.holdings.some((h) => h.id === id));
+  if (after) return after.holdings.find((h) => h.id === id)!;
+  return null;
+}
+
+function findSourceOption(
+  snapshots: PortfolioSnapshot[],
+  currentOptionHoldings: OptionHolding[],
+  targetDate: string,
+  id: string,
+): OptionHolding | null {
+  const fromCurrent = currentOptionHoldings.find((o) => o.id === id);
+  if (fromCurrent) return fromCurrent;
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const before = [...sorted].reverse().find((s) => s.date < targetDate && s.optionHoldings.some((o) => o.id === id));
+  if (before) return before.optionHoldings.find((o) => o.id === id)!;
+  const after = sorted.find((s) => s.date > targetDate && s.optionHoldings.some((o) => o.id === id));
+  if (after) return after.optionHoldings.find((o) => o.id === id)!;
+  return null;
+}
+
+function buildSnapshotForDate(
+  date: string,
+  prices: Map<string, { value: number; type: "stock" | "option" }>,
+  existing: PortfolioSnapshot[],
+  currentHoldings: StockHolding[],
+  currentOptionHoldings: OptionHolding[],
+  cash: CashReserve,
+): PortfolioSnapshot {
+  const sorted = [...existing].sort((a, b) => a.date.localeCompare(b.date));
+  const nearestBefore = [...sorted].reverse().find((s) => s.date < date);
+  const ref = nearestBefore ?? sorted[sorted.length - 1];
+
+  const holdings: StockHolding[] = [];
+  const optionHoldings: OptionHolding[] = [];
+  const seenStock = new Set<string>();
+  const seenOption = new Set<string>();
+
+  for (const [id, p] of prices) {
+    if (p.type === "stock") {
+      const src = findSourceStock(existing, currentHoldings, date, id);
+      if (src) {
+        holdings.push({
+          ...src,
+          nowPrice: p.value,
+          total: p.value * src.number,
+          revenue: p.value * src.number - src.cost,
+          revenuePercentage: src.cost > 0
+            ? parseFloat((((p.value * src.number - src.cost) / src.cost) * 100).toFixed(2))
+            : 0,
+        });
+        seenStock.add(id);
+      }
+    } else {
+      const src = findSourceOption(existing, currentOptionHoldings, date, id);
+      if (src) {
+        const currentValue = p.value * src.contracts * 100;
+        optionHoldings.push({
+          ...src,
+          nowPremium: p.value,
+          currentValue,
+          revenue: currentValue - src.totalCost,
+          revenuePercentage: src.totalCost > 0
+            ? parseFloat((((currentValue - src.totalCost) / src.totalCost) * 100).toFixed(2))
+            : 0,
+        });
+        seenOption.add(id);
+      }
+    }
+  }
+
+  if (ref) {
+    for (const h of ref.holdings) {
+      if (!seenStock.has(h.id)) holdings.push(h);
+    }
+    for (const o of ref.optionHoldings) {
+      if (!seenOption.has(o.id)) optionHoldings.push(o);
+    }
+  }
+
+  const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
+  const totalCost = holdings.reduce((s, h) => s + h.cost, 0) + optionHoldings.reduce((s, o) => s + o.totalCost, 0);
+  const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0) + optionHoldings.reduce((s, o) => s + o.revenue, 0);
+
+  return {
+    timestamp: Date.now(),
+    date,
+    holdings,
+    optionHoldings,
+    cash,
+    dailyReturn: totalCost > 0 ? parseFloat(((totalRevenue / totalCost) * 100).toFixed(2)) : 0,
+  };
+}
+
+function recalcSnapshotDerived(snap: PortfolioSnapshot): PortfolioSnapshot {
+  const totalValue = snap.holdings.reduce((s, h) => s + h.total, 0) + snap.optionHoldings.reduce((s, o) => s + o.currentValue, 0);
+  const totalCost = snap.holdings.reduce((s, h) => s + h.cost, 0) + snap.optionHoldings.reduce((s, o) => s + o.totalCost, 0);
+  const totalRevenue = snap.holdings.reduce((s, h) => s + h.revenue, 0) + snap.optionHoldings.reduce((s, o) => s + o.revenue, 0);
+  return {
+    ...snap,
+    dailyReturn: totalCost > 0 ? parseFloat(((totalRevenue / totalCost) * 100).toFixed(2)) : 0,
+    timestamp: Date.now(),
+  };
+}
+
+function stockWithPrice(h: StockHolding, nowPrice: number): StockHolding {
+  const total = nowPrice * h.number;
+  const revenue = total - h.cost;
+  return {
+    ...h,
+    nowPrice,
+    total,
+    revenue,
+    revenuePercentage: h.cost > 0 ? parseFloat(((revenue / h.cost) * 100).toFixed(2)) : 0,
+  };
+}
+
+function optionWithPremium(o: OptionHolding, nowPremium: number): OptionHolding {
+  const currentValue = nowPremium * o.contracts * 100;
+  const revenue = currentValue - o.totalCost;
+  return {
+    ...o,
+    nowPremium,
+    currentValue,
+    revenue,
+    revenuePercentage: o.totalCost > 0 ? parseFloat(((revenue / o.totalCost) * 100).toFixed(2)) : 0,
+  };
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -527,20 +669,19 @@ export const useStore = create<AppState>((set, get) => ({
     const { holdings, optionHoldings, cash } = get();
     const date = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
-    // 如果是全新的日期且市场未收盘，跳过快照创建（防止未开市时提前生成当日快照）
-    const existingIdx = get().snapshots.findIndex((s) => s.date === date);
-    if (existingIdx < 0) {
-      const now = new Date();
-      const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const day = et.getDay();
-      const isWeekend = day === 0 || day === 6;
-      const totalMinutes = et.getHours() * 60 + et.getMinutes();
-      const afterClose = !isWeekend && totalMinutes >= 16 * 60;
-      if (!afterClose) {
-        console.log("[takeSnapshot] skipping - market not closed yet for", date);
-        return;
-      }
+    // 市场未收盘时跳过，无论当日快照是否存在都禁止提前生成/覆盖
+    const now = new Date();
+    const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const day = et.getDay();
+    const isWeekend = day === 0 || day === 6;
+    const totalMinutes = et.getHours() * 60 + et.getMinutes();
+    const afterClose = !isWeekend && totalMinutes >= 16 * 60;
+    if (!afterClose) {
+      console.log("[takeSnapshot] skipping - market not closed yet for", date);
+      return;
     }
+
+    const existingIdx = get().snapshots.findIndex((s) => s.date === date);
 
     const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
     const totalCost = holdings.reduce((s, h) => s + h.cost, 0) + optionHoldings.reduce((s, o) => s + o.totalCost, 0);
@@ -574,6 +715,119 @@ export const useStore = create<AppState>((set, get) => ({
       { date, return: totalRevenue },
     ].sort((a, b) => a.date.localeCompare(b.date));
     set({ dailyReturns });
+    setItem("dailyReturns", dailyReturns);
+    markPendingSync("dailyReturns", dailyReturns);
+  },
+
+  updateHistoricalPrices: (updates) => {
+    const { snapshots: currentSnapshots, holdings: currentHoldings, optionHoldings: currentOptionHoldings, cash } = get();
+    const snapshots = [...currentSnapshots];
+    const newDatePrices = new Map<string, Map<string, { value: number; type: "stock" | "option" }>>();
+    const affectedDates = new Set<string>();
+
+    for (const u of updates) {
+      affectedDates.add(u.date);
+      const snapIdx = snapshots.findIndex((s) => s.date === u.date);
+
+      if (snapIdx < 0) {
+        let byDate = newDatePrices.get(u.date);
+        if (!byDate) { byDate = new Map(); newDatePrices.set(u.date, byDate); }
+        const isStock = u.type ? u.type === "stock"
+          : currentHoldings.some((h) => h.id === u.id) || currentSnapshots.some((s) => s.holdings.some((h) => h.id === u.id));
+        byDate.set(u.id, { value: u.value, type: isStock ? "stock" : "option" });
+        continue;
+      }
+
+      const snap = snapshots[snapIdx];
+      const hIdx = snap.holdings.findIndex((h) => h.id === u.id);
+      if (hIdx >= 0) {
+        const holdings = [...snap.holdings];
+        holdings[hIdx] = stockWithPrice(holdings[hIdx], u.value);
+        snapshots[snapIdx] = recalcSnapshotDerived({ ...snap, holdings });
+        continue;
+      }
+
+      const oIdx = snap.optionHoldings.findIndex((o) => o.id === u.id);
+      if (oIdx >= 0) {
+        const optionHoldings = [...snap.optionHoldings];
+        optionHoldings[oIdx] = optionWithPremium(optionHoldings[oIdx], u.value);
+        snapshots[snapIdx] = recalcSnapshotDerived({ ...snap, optionHoldings });
+        continue;
+      }
+
+      const srcStock = findSourceStock(currentSnapshots, currentHoldings, u.date, u.id);
+      if (srcStock) {
+        snapshots[snapIdx] = recalcSnapshotDerived({
+          ...snap,
+          holdings: [...snap.holdings, stockWithPrice(srcStock, u.value)],
+        });
+        continue;
+      }
+
+      const srcOption = findSourceOption(currentSnapshots, currentOptionHoldings, u.date, u.id);
+      if (srcOption) {
+        snapshots[snapIdx] = recalcSnapshotDerived({
+          ...snap,
+          optionHoldings: [...snap.optionHoldings, optionWithPremium(srcOption, u.value)],
+        });
+      }
+    }
+
+    for (const [date, prices] of newDatePrices) {
+      snapshots.push(buildSnapshotForDate(date, prices, snapshots, currentHoldings, currentOptionHoldings, cash));
+    }
+    snapshots.sort((a, b) => a.date.localeCompare(b.date));
+
+    const dailyReturns = [...get().dailyReturns];
+    for (const date of affectedDates) {
+      const snap = snapshots.find((s) => s.date === date);
+      if (!snap) continue;
+      const totalRevenue = snap.holdings.reduce((s, h) => s + h.revenue, 0) + snap.optionHoldings.reduce((s, o) => s + o.revenue, 0);
+      const idx = dailyReturns.findIndex((d) => d.date === date);
+      if (idx >= 0) {
+        dailyReturns[idx] = { date, return: totalRevenue };
+      } else {
+        dailyReturns.push({ date, return: totalRevenue });
+      }
+    }
+    dailyReturns.sort((a, b) => a.date.localeCompare(b.date));
+
+    set({ snapshots, dailyReturns });
+    setItem("snapshots", snapshots);
+    markPendingSync("snapshots", snapshots);
+    setItem("dailyReturns", dailyReturns);
+    markPendingSync("dailyReturns", dailyReturns);
+
+    // 如果最新快照的日期在本次修改范围内，将最新收盘价同步到当前持仓显示
+    const sortedSnapshots = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+    const latest = sortedSnapshots[sortedSnapshots.length - 1];
+    if (latest && affectedDates.has(latest.date)) {
+      const currentHoldings = get().holdings.map((h) => {
+        const snapH = latest.holdings.find((sh) => sh.id === h.id);
+        return snapH ? { ...snapH } : h;
+      });
+      const currentOptionHoldings = get().optionHoldings.map((o) => {
+        const snapO = latest.optionHoldings.find((so) => so.id === o.id);
+        return snapO ? { ...snapO } : o;
+      });
+      set({ holdings: currentHoldings, optionHoldings: currentOptionHoldings });
+      setItem("holdings", currentHoldings);
+      markPendingSync("holdings", currentHoldings);
+      setItem("optionHoldings", currentOptionHoldings);
+      markPendingSync("optionHoldings", currentOptionHoldings);
+    }
+  },
+
+  deleteSnapshot: (date) => {
+    const snapshots = get().snapshots.filter((s) => s.date !== date);
+    const dailyReturns = get().dailyReturns.filter((d) => d.date !== date);
+    const activeSnapshotIndex = get().activeSnapshotIndex;
+    const newIndex = activeSnapshotIndex !== null && activeSnapshotIndex >= snapshots.length
+      ? (snapshots.length > 0 ? snapshots.length - 1 : null)
+      : activeSnapshotIndex;
+    set({ snapshots, dailyReturns, activeSnapshotIndex: newIndex });
+    setItem("snapshots", snapshots);
+    markPendingSync("snapshots", snapshots);
     setItem("dailyReturns", dailyReturns);
     markPendingSync("dailyReturns", dailyReturns);
   },

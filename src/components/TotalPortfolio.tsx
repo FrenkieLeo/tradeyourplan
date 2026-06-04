@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import { useStore } from "@/lib/store";
 import TradeModal from "./TradeModal";
 import CashModal from "./CashModal";
+import PriceEditModal from "./PriceEditModal";
 
 export default function TotalPortfolio() {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -12,6 +13,7 @@ export default function TotalPortfolio() {
   const { holdings, optionHoldings, cash, dailyReturns, activeSnapshotIndex, snapshots, isRefreshing } = useStore();
   const [modalOpen, setModalOpen] = useState(false);
   const [cashModalOpen, setCashModalOpen] = useState(false);
+  const [priceEditOpen, setPriceEditOpen] = useState(false);
 
   const displayData =
     activeSnapshotIndex !== null && snapshots[activeSnapshotIndex]
@@ -138,7 +140,15 @@ export default function TotalPortfolio() {
         className="cursor-pointer rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4 transition-colors hover:border-[var(--tv-accent)]"
         onClick={() => setModalOpen(true)}
       >
-        <h2 className="mb-4 text-base font-semibold">持仓总收益</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold">持仓总收益</h2>
+          <button
+            onClick={(e) => { e.stopPropagation(); setPriceEditOpen(true); }}
+            className="rounded px-3 py-1 text-xs font-medium text-[#2962ff] transition-colors hover:bg-[#2962ff]/10"
+          >
+            ✎ 更新历史收盘价
+          </button>
+        </div>
 
         {isRefreshing ? (
           <div className="flex h-64 w-full items-center justify-center">
@@ -196,6 +206,7 @@ export default function TotalPortfolio() {
 
       <TradeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <CashModal open={cashModalOpen} onClose={() => setCashModalOpen(false)} />
+      <PriceEditModal open={priceEditOpen} onClose={() => setPriceEditOpen(false)} />
     </>
   );
 }
