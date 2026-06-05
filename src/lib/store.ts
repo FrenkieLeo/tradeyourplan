@@ -77,7 +77,7 @@ export function mergeSnapshots(a: PortfolioSnapshot[], b: PortfolioSnapshot[]): 
 }
 
 // 按 id 合并（计划/日志），冲突时取 updatedAt 较大者（无 updatedAt 时以 b 为准）。
-function mergeById<T extends { id: string; updatedAt?: number }>(a: T[], b: T[]): T[] {
+export function mergeById<T extends { id: string; updatedAt?: number }>(a: T[], b: T[]): T[] {
   const map = new Map<string, T>();
   for (const x of a) map.set(x.id, x);
   for (const x of b) {
@@ -85,6 +85,29 @@ function mergeById<T extends { id: string; updatedAt?: number }>(a: T[], b: T[])
     if (!ex || (x.updatedAt ?? 1) >= (ex.updatedAt ?? 0)) map.set(x.id, x);
   }
   return [...map.values()];
+}
+
+// 应用墓碑：剔除被删除且删除时间不早于自身更新时间的条目（支持删后重建）。
+export function applyTombstones<T>(
+  items: T[],
+  keyOf: (t: T) => string,
+  tsOf: (t: T) => number,
+  tombstones: DeletedTradeRef[]
+): T[] {
+  const tmap = new Map<string, number>();
+  for (const t of tombstones) tmap.set(t.uid, Math.max(tmap.get(t.uid) ?? 0, t.deletedAt));
+  return items.filter((it) => {
+    const d = tmap.get(keyOf(it));
+    return !(d != null && d >= tsOf(it));
+  });
+}
+
+// 看盘日志的 id 是「股票代码」而非唯一键，不能按 id 去重（会把同一股票的多条日志合并成一条）。
+// 这里按「股票代码 + 时间 + 内容」联合去重，保留所有不同的日志。
+export function mergeJournalEntries(a: JournalEntry[], b: JournalEntry[]): JournalEntry[] {
+  const map = new Map<string, JournalEntry>();
+  for (const e of [...a, ...b]) map.set(`${e.id}|${e.time}|${e.content}`, e);
+  return [...map.values()].sort((x, y) => x.time - y.time);
 }
 
 type DailyReturn = { date: string; return: number };
@@ -102,6 +125,8 @@ interface SyncDoc {
   snapshots: PortfolioSnapshot[];
   dailyReturns: DailyReturn[];
   deletedTradeUids: DeletedTradeRef[];
+  deletedSnapshotDates: DeletedTradeRef[];
+  deletedPlanIds: DeletedTradeRef[];
   baseCash: number;
   baseCashUpdatedAt: number;
   holdings: StockHolding[];
@@ -123,6 +148,8 @@ interface AppState {
   snapshots: PortfolioSnapshot[];
   dailyReturns: { date: string; return: number }[];
   deletedTradeUids: DeletedTradeRef[];
+  deletedSnapshotDates: DeletedTradeRef[];
+  deletedPlanIds: DeletedTradeRef[];
   baseCashUpdatedAt: number;
   activeSnapshotIndex: number | null;
 
@@ -510,13 +537,15 @@ export const useStore = create<AppState>((set, get) => ({
   snapshots: [],
   dailyReturns: [],
   deletedTradeUids: [],
+  deletedSnapshotDates: [],
+  deletedPlanIds: [],
   baseCashUpdatedAt: 0,
   activeSnapshotIndex: null,
   loaded: false,
   isRefreshing: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt] = await Promise.all([
+    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt, storedSnapTombs, storedPlanTombs] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
       getItem<JournalEntry[]>("journalEntries"),
@@ -527,6 +556,8 @@ export const useStore = create<AppState>((set, get) => ({
       getItem<OptionHolding[]>("optionHoldings"),
       getItem<DeletedTradeRef[]>("deletedTradeUids"),
       getItem<number>("baseCashUpdatedAt"),
+      getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
+      getItem<DeletedTradeRef[]>("deletedPlanIds"),
     ]);
 
     console.log("[initialize] raw data from IndexedDB:", {
@@ -538,32 +569,44 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     const deletedTradeUids = storedTombstones ?? [];
+    const deletedSnapshotDates = storedSnapTombs ?? [];
+    const deletedPlanIds = storedPlanTombs ?? [];
     const tradeRecords = mergeTradeRecords(normalizeTradeRecords(records ?? []), [], deletedTradeUids);
-    const tradePlans: TradePlan[] = (plans ?? []).map((p: any) => {
-      const plan = { ...p };
-      plan.updatedAt = plan.updatedAt ?? plan.createdAt;
-      plan.cancelled = plan.cancelled ?? false;
-      plan.riskRewardWin = plan.riskRewardWin ?? plan.riskRewardRatio ?? 0;
-      plan.riskRewardLose = plan.riskRewardLose ?? 1;
-      // 迁移旧版 expectedPrice → 价格区间
-      if (plan.expectedPriceMin == null || plan.expectedPriceMax == null) {
-        plan.expectedPriceMin = plan.expectedPrice ?? 0;
-        plan.expectedPriceMax = plan.expectedPrice ?? 0;
-      }
-      delete plan.expectedPrice;
-      return plan;
-    });
+    const tradePlans: TradePlan[] = applyTombstones(
+      (plans ?? []).map((p: any) => {
+        const plan = { ...p };
+        plan.updatedAt = plan.updatedAt ?? plan.createdAt;
+        plan.cancelled = plan.cancelled ?? false;
+        plan.riskRewardWin = plan.riskRewardWin ?? plan.riskRewardRatio ?? 0;
+        plan.riskRewardLose = plan.riskRewardLose ?? 1;
+        // 迁移旧版 expectedPrice → 价格区间
+        if (plan.expectedPriceMin == null || plan.expectedPriceMax == null) {
+          plan.expectedPriceMin = plan.expectedPrice ?? 0;
+          plan.expectedPriceMax = plan.expectedPrice ?? 0;
+        }
+        delete plan.expectedPrice;
+        return plan;
+      }),
+      (p) => p.id,
+      (p) => p.updatedAt ?? 0,
+      deletedPlanIds
+    );
     const journalEntries = (journals ?? []).map((j) => {
       const old = j as JournalEntry & { targetType?: string };
       return { ...old, targetType: old.targetType ?? "STOCK" };
     });
     const rawSnapshots = snaps ?? [];
-    const snapshots: PortfolioSnapshot[] = [...new Map(rawSnapshots.map((s) => [s.date, s])).values()]
-      .map((s) => ({
-        ...s,
-        optionHoldings: (s as PortfolioSnapshot & { optionHoldings?: OptionHolding[] }).optionHoldings ?? [],
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const snapshots: PortfolioSnapshot[] = applyTombstones(
+      [...new Map(rawSnapshots.map((s) => [s.date, s])).values()]
+        .map((s) => ({
+          ...s,
+          optionHoldings: (s as PortfolioSnapshot & { optionHoldings?: OptionHolding[] }).optionHoldings ?? [],
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      (s) => s.date,
+      (s) => s.timestamp ?? 0,
+      deletedSnapshotDates
+    );
     const baseCash = storedBaseCash ?? 10000;
 
     const { holdings, optionHoldings } = deriveHoldings(tradeRecords, snapshots);
@@ -584,6 +627,8 @@ export const useStore = create<AppState>((set, get) => ({
       snapshots,
       dailyReturns: storedDr ?? [],
       deletedTradeUids,
+      deletedSnapshotDates,
+      deletedPlanIds,
       baseCashUpdatedAt: storedBaseCashUpdatedAt ?? 0,
       baseCash,
       holdings,
@@ -740,6 +785,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ tradePlans: plans });
     setItem("tradePlans", plans);
     markPendingSync("tradePlans", plans);
+    get().syncToJsonBin();
   },
 
   updateTradePlan: (id, plan) => {
@@ -749,13 +795,18 @@ export const useStore = create<AppState>((set, get) => ({
     set({ tradePlans: plans });
     setItem("tradePlans", plans);
     markPendingSync("tradePlans", plans);
+    get().syncToJsonBin();
   },
 
   removeTradePlan: (id) => {
     const plans = get().tradePlans.filter((p) => p.id !== id);
-    set({ tradePlans: plans });
+    const deletedPlanIds = mergeTombstones(get().deletedPlanIds, [{ uid: id, deletedAt: Date.now() }]);
+    set({ tradePlans: plans, deletedPlanIds });
     setItem("tradePlans", plans);
+    setItem("deletedPlanIds", deletedPlanIds);
     markPendingSync("tradePlans", plans);
+    markPendingSync("deletedPlanIds", deletedPlanIds);
+    get().syncToJsonBin();
   },
 
   addJournalEntry: (entry) => {
@@ -763,6 +814,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ journalEntries: entries });
     setItem("journalEntries", entries);
     markPendingSync("journalEntries", entries);
+    get().syncToJsonBin();
   },
 
   takeSnapshot: () => {
@@ -919,15 +971,18 @@ export const useStore = create<AppState>((set, get) => ({
     const { snapshots: oldSnapshots, dailyReturns: oldDailyReturns, holdings: oldHoldings, optionHoldings: oldOptionHoldings } = get();
     const snapshots = oldSnapshots.filter((s) => s.date !== date);
     const dailyReturns = oldDailyReturns.filter((d) => d.date !== date);
+    const deletedSnapshotDates = mergeTombstones(get().deletedSnapshotDates, [{ uid: date, deletedAt: Date.now() }]);
     const activeSnapshotIndex = get().activeSnapshotIndex;
     const newIndex = activeSnapshotIndex !== null && activeSnapshotIndex >= snapshots.length
       ? (snapshots.length > 0 ? snapshots.length - 1 : null)
       : activeSnapshotIndex;
-    set({ snapshots, dailyReturns, activeSnapshotIndex: newIndex });
+    set({ snapshots, dailyReturns, deletedSnapshotDates, activeSnapshotIndex: newIndex });
     setItem("snapshots", snapshots);
     markPendingSync("snapshots", snapshots);
     setItem("dailyReturns", dailyReturns);
     markPendingSync("dailyReturns", dailyReturns);
+    setItem("deletedSnapshotDates", deletedSnapshotDates);
+    markPendingSync("deletedSnapshotDates", deletedSnapshotDates);
 
     const wasLatest = oldSnapshots.length > 0 && oldSnapshots[oldSnapshots.length - 1].date === date;
     if (wasLatest && snapshots.length > 0) {
@@ -1006,6 +1061,8 @@ export const useStore = create<AppState>((set, get) => ({
         snapshots: s.snapshots,
         dailyReturns: s.dailyReturns,
         deletedTradeUids: s.deletedTradeUids,
+        deletedSnapshotDates: s.deletedSnapshotDates,
+        deletedPlanIds: s.deletedPlanIds,
         baseCash: s.baseCash,
         baseCashUpdatedAt: s.baseCashUpdatedAt,
         holdings: s.holdings,
@@ -1027,12 +1084,22 @@ export const useStore = create<AppState>((set, get) => ({
     const tombstones = remote
       ? mergeTombstones(remote.deletedTradeUids ?? [], s.deletedTradeUids)
       : s.deletedTradeUids;
+    const snapTombs = remote
+      ? mergeTombstones(remote.deletedSnapshotDates ?? [], s.deletedSnapshotDates)
+      : s.deletedSnapshotDates;
+    const planTombs = remote
+      ? mergeTombstones(remote.deletedPlanIds ?? [], s.deletedPlanIds)
+      : s.deletedPlanIds;
     const tradeRecords = remote
       ? mergeTradeRecords(normalizeTradeRecords(remote.tradeRecords ?? []), s.tradeRecords, tombstones)
       : s.tradeRecords;
-    const snapshots = remote ? mergeSnapshots(remote.snapshots ?? [], s.snapshots) : s.snapshots;
-    const tradePlans = remote ? mergeById(remote.tradePlans ?? [], s.tradePlans) : s.tradePlans;
-    const journalEntries = remote ? mergeById(remote.journalEntries ?? [], s.journalEntries) : s.journalEntries;
+    const snapshots = remote
+      ? applyTombstones(mergeSnapshots(remote.snapshots ?? [], s.snapshots), (x) => x.date, (x) => x.timestamp ?? 0, snapTombs)
+      : s.snapshots;
+    const tradePlans = remote
+      ? applyTombstones(mergeById(remote.tradePlans ?? [], s.tradePlans), (x) => x.id, (x) => x.updatedAt ?? 0, planTombs)
+      : s.tradePlans;
+    const journalEntries = remote ? mergeJournalEntries(remote.journalEntries ?? [], s.journalEntries) : s.journalEntries;
     const dailyReturns = remote ? mergeDailyReturns(remote.dailyReturns ?? [], s.dailyReturns) : s.dailyReturns;
     const remoteBaseAt = remote?.baseCashUpdatedAt ?? 0;
     const baseCash = remoteBaseAt > s.baseCashUpdatedAt ? (remote!.baseCash ?? s.baseCash) : s.baseCash;
@@ -1052,6 +1119,8 @@ export const useStore = create<AppState>((set, get) => ({
       snapshots,
       dailyReturns,
       deletedTradeUids: tombstones,
+      deletedSnapshotDates: snapTombs,
+      deletedPlanIds: planTombs,
       baseCash,
       baseCashUpdatedAt,
       holdings,
@@ -1076,6 +1145,8 @@ export const useStore = create<AppState>((set, get) => ({
       snapshots,
       dailyReturns,
       deletedTradeUids: tombstones,
+      deletedSnapshotDates: snapTombs,
+      deletedPlanIds: planTombs,
       baseCash,
       baseCashUpdatedAt,
       holdings,
@@ -1088,6 +1159,8 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("snapshots", snapshots);
     setItem("dailyReturns", dailyReturns);
     setItem("deletedTradeUids", tombstones);
+    setItem("deletedSnapshotDates", snapTombs);
+    setItem("deletedPlanIds", planTombs);
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);
   },

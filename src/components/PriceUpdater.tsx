@@ -7,6 +7,9 @@ import {
   mergeTradeRecords,
   mergeTombstones,
   mergeSnapshots,
+  mergeById,
+  mergeJournalEntries,
+  applyTombstones,
 } from "@/lib/store";
 import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
@@ -42,6 +45,8 @@ export default function PriceUpdater() {
           snapshots?: PortfolioSnapshot[];
           dailyReturns?: DailyPricePoint[];
           deletedTradeUids?: DeletedTradeRef[];
+          deletedSnapshotDates?: DeletedTradeRef[];
+          deletedPlanIds?: DeletedTradeRef[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
           baseCash?: number;
@@ -65,23 +70,41 @@ export default function PriceUpdater() {
             date < todayET || (date === todayET && marketClosed);
 
           // 读取本地（可能含未同步成功的改动），与远程按 uid / 日期 / 墓碑合并，避免丢失本地改动。
-          const [localRecords, localTombs, localSnaps, localDr] = await Promise.all([
+          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localJournals] = await Promise.all([
             getItem<TradeRecord[]>("tradeRecords"),
             getItem<DeletedTradeRef[]>("deletedTradeUids"),
             getItem<PortfolioSnapshot[]>("snapshots"),
             getItem<DailyPricePoint[]>("dailyReturns"),
+            getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
+            getItem<DeletedTradeRef[]>("deletedPlanIds"),
+            getItem<TradePlan[]>("tradePlans"),
+            getItem<JournalEntry[]>("journalEntries"),
           ]);
 
           const tombstones = mergeTombstones(remote.deletedTradeUids ?? [], localTombs ?? []);
+          const snapTombs = mergeTombstones(remote.deletedSnapshotDates ?? [], localSnapTombs ?? []);
+          const planTombs = mergeTombstones(remote.deletedPlanIds ?? [], localPlanTombs ?? []);
           const mergedRecords = mergeTradeRecords(
             normalizeTradeRecords(remote.tradeRecords ?? []),
             normalizeTradeRecords(localRecords ?? []),
             tombstones
           );
-          const mergedSnapshots = mergeSnapshots(
-            (remote.snapshots ?? []).filter((s) => isFinalized(s.date)),
-            (localSnaps ?? []).filter((s) => isFinalized(s.date))
+          const mergedSnapshots = applyTombstones(
+            mergeSnapshots(
+              (remote.snapshots ?? []).filter((s) => isFinalized(s.date)),
+              (localSnaps ?? []).filter((s) => isFinalized(s.date))
+            ),
+            (x) => x.date,
+            (x) => x.timestamp ?? 0,
+            snapTombs
           );
+          const mergedPlans = applyTombstones(
+            mergeById(remote.tradePlans ?? [], localPlans ?? []),
+            (x) => x.id,
+            (x) => x.updatedAt ?? 0,
+            planTombs
+          );
+          const mergedJournals = mergeJournalEntries(remote.journalEntries ?? [], localJournals ?? []);
           const drMap = new Map<string, DailyPricePoint>();
           for (const d of (remote.dailyReturns ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
           for (const d of (localDr ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
@@ -89,10 +112,12 @@ export default function PriceUpdater() {
 
           await setItem("tradeRecords", mergedRecords);
           await setItem("deletedTradeUids", tombstones);
+          await setItem("deletedSnapshotDates", snapTombs);
+          await setItem("deletedPlanIds", planTombs);
           await setItem("snapshots", mergedSnapshots);
           await setItem("dailyReturns", mergedDr);
-          if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
-          if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
+          await setItem("tradePlans", mergedPlans);
+          await setItem("journalEntries", mergedJournals);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
           if (remote.baseCashUpdatedAt != null) await setItem("baseCashUpdatedAt", remote.baseCashUpdatedAt);
 
