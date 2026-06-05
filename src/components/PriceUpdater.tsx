@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useStore } from "@/lib/store";
-import { getETDate } from "@/lib/alphavantage";
+import { getETDate, isAfterMarketClose } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
 import { setItem } from "@/lib/db";
 import type {
@@ -49,20 +49,38 @@ export default function PriceUpdater() {
         });
 
         if (remote) {
+          // ADR-010：过滤掉「未来日期」以及「当日美东时间尚未收盘」的预生成快照/收益，
+          // 只有美东收盘后定型的数据才允许进入本地存储与展示；同时按日期去重。
+          const todayET = getETDate();
+          const marketClosed = isAfterMarketClose();
+          const isFinalized = (date: string) =>
+            date < todayET || (date === todayET && marketClosed);
+
+          const cleanSnapshots = remote.snapshots
+            ? [
+                ...new Map(
+                  remote.snapshots
+                    .filter((s) => isFinalized(s.date))
+                    .map((s) => [s.date, s])
+                ).values(),
+              ].sort((a, b) => a.date.localeCompare(b.date))
+            : undefined;
+          const cleanDailyReturns = remote.dailyReturns
+            ? remote.dailyReturns.filter((d) => isFinalized(d.date))
+            : undefined;
+
           if (remote.holdings?.length) {
             await setItem("holdings", remote.holdings);
-          } else if (remote.snapshots?.length) {
-            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-            const latest = sorted[sorted.length - 1];
+          } else if (cleanSnapshots?.length) {
+            const latest = cleanSnapshots[cleanSnapshots.length - 1];
             if (latest.holdings?.length) {
               await setItem("holdings", latest.holdings);
             }
           }
           if (remote.optionHoldings?.length) {
             await setItem("optionHoldings", remote.optionHoldings);
-          } else if (remote.snapshots?.length) {
-            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-            const latest = sorted[sorted.length - 1];
+          } else if (cleanSnapshots?.length) {
+            const latest = cleanSnapshots[cleanSnapshots.length - 1];
             if (latest.optionHoldings?.length) {
               await setItem("optionHoldings", latest.optionHoldings);
             }
@@ -70,8 +88,8 @@ export default function PriceUpdater() {
           if (remote.tradeRecords?.length) await setItem("tradeRecords", remote.tradeRecords);
           if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
           if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
-          if (remote.snapshots !== undefined) await setItem("snapshots", remote.snapshots);
-          if (remote.dailyReturns !== undefined) await setItem("dailyReturns", remote.dailyReturns);
+          if (cleanSnapshots !== undefined) await setItem("snapshots", cleanSnapshots);
+          if (cleanDailyReturns !== undefined) await setItem("dailyReturns", cleanDailyReturns);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
         } else {
           const newBinId = await createBin({
