@@ -188,6 +188,36 @@ interface AppState {
   syncToJsonBin: (keepalive?: boolean) => Promise<void>;
 }
 
+// 已实现盈亏（标准移动平均成本法）：只在卖出时结算 (卖价 - 卖出前均价) × 卖出量。
+// 买入更新均价、卖出不改均价——这是常规「已实现收益」口径，与界面里滚动降成本的展示口径相互独立。
+export function calcRealizedPnl(records: TradeRecord[]): { total: number; bySymbol: Record<string, number> } {
+  const sorted = [...records].sort(
+    (a, b) => a.tradeTime - b.tradeTime || (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+  );
+  const pos = new Map<string, { qty: number; avg: number }>();
+  const bySymbol: Record<string, number> = {};
+  let total = 0;
+  for (const r of sorted) {
+    const mult = r.assetType === "OPTION" ? 100 : 1;
+    const cur = pos.get(r.id) ?? { qty: 0, avg: 0 };
+    if (r.number > 0) {
+      const newQty = cur.qty + r.number;
+      cur.avg = newQty > 0 ? (cur.avg * cur.qty + r.price * r.number) / newQty : 0;
+      cur.qty = newQty;
+    } else {
+      const sellQty = Math.min(Math.abs(r.number), cur.qty);
+      const realized = (r.price - cur.avg) * sellQty * mult;
+      total += realized;
+      bySymbol[r.id] = (bySymbol[r.id] ?? 0) + realized;
+      cur.qty = Math.max(0, cur.qty - Math.abs(r.number));
+      if (cur.qty === 0) cur.avg = 0;
+    }
+    pos.set(r.id, cur);
+  }
+  for (const k of Object.keys(bySymbol)) bySymbol[k] = parseFloat(bySymbol[k].toFixed(2));
+  return { total: parseFloat(total.toFixed(2)), bySymbol };
+}
+
 function calcTradeCashAdjustment(records: TradeRecord[]): number {
   let adj = 0;
   for (const r of records) {

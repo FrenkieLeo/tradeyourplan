@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
-import { useStore } from "@/lib/store";
+import { useStore, calcRealizedPnl } from "@/lib/store";
 import TradeModal from "./TradeModal";
 import CashModal from "./CashModal";
 import PriceEditModal from "./PriceEditModal";
@@ -10,7 +10,8 @@ import PriceEditModal from "./PriceEditModal";
 export default function TotalPortfolio() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { holdings, optionHoldings, cash, activeSnapshotIndex, snapshots, isRefreshing } = useStore();
+  const { holdings, optionHoldings, cash, activeSnapshotIndex, snapshots, isRefreshing, tradeRecords } = useStore();
+  const realizedPnl = calcRealizedPnl(tradeRecords).total;
   const [modalOpen, setModalOpen] = useState(false);
   const [cashModalOpen, setCashModalOpen] = useState(false);
   const [priceEditOpen, setPriceEditOpen] = useState(false);
@@ -166,8 +167,8 @@ export default function TotalPortfolio() {
           </div>
         ) : (
           <>
-            {/* 三个核心数字 */}
-            <div className="mb-4 grid grid-cols-3 gap-4">
+            {/* 四个核心数字 */}
+            <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
               <div>
                 <div className="text-xs text-[var(--tv-text-secondary)]">持仓总金额</div>
                 <div className="text-xl font-bold text-[var(--tv-text)]">
@@ -185,13 +186,19 @@ export default function TotalPortfolio() {
               </div>
               <div>
                 <div className="text-xs text-[var(--tv-text-secondary)]">
-                  持仓收益
+                  持仓收益<span className="ml-1 text-[10px]">(未实现)</span>
                   <span className={`ml-2 text-sm ${totalReturn >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
                     {totalReturn >= 0 ? "+" : ""}{totalReturn}%
                   </span>
                 </div>
                 <div className={`text-xl font-bold ${totalRevenue >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
                   {totalRevenue >= 0 ? "+" : ""}${totalRevenue.toLocaleString()}
+                </div>
+              </div>
+              <div title="按移动平均成本法，历次卖出已落袋的盈亏合计">
+                <div className="text-xs text-[var(--tv-text-secondary)]">已实现盈亏</div>
+                <div className={`text-xl font-bold ${realizedPnl >= 0 ? "text-[var(--tv-green)]" : "text-[var(--tv-red)]"}`}>
+                  {realizedPnl >= 0 ? "+" : ""}${realizedPnl.toLocaleString()}
                 </div>
               </div>
             </div>
