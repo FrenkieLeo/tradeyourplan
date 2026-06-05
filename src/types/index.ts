@@ -27,6 +27,10 @@ export interface OptionHolding {
 }
 
 export interface TradeRecord {
+  // 全局唯一标识（跨设备稳定）。区分同一股票/同一天的多笔交易，并支撑多端合并同步。
+  uid: string;
+  // 最近一次修改时间（毫秒）。多端合并时按其判定哪条记录更新。
+  updatedAt?: number;
   id: string;
   assetType?: "STOCK" | "OPTION";
   name: string;
@@ -39,6 +43,12 @@ export interface TradeRecord {
   optionType?: "CALL" | "PUT";
   optionStrike?: number;
   optionExpiration?: string;
+}
+
+// 删除墓碑：记录被删除的交易 uid 及删除时间，用于多端同步时正确传播删除。
+export interface DeletedTradeRef {
+  uid: string;
+  deletedAt: number;
 }
 
 export interface CashReserve {

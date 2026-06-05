@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useStore } from "@/lib/store";
-import { getETDate } from "@/lib/alphavantage";
+import {
+  useStore,
+  normalizeTradeRecords,
+  mergeTradeRecords,
+  mergeTombstones,
+  mergeSnapshots,
+  mergeById,
+  mergeJournalEntries,
+  applyTombstones,
+} from "@/lib/store";
+import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
-import { setItem } from "@/lib/db";
+import { getItem, setItem, hasPendingSyncs } from "@/lib/db";
 import type {
   StockHolding,
   OptionHolding,
@@ -13,13 +22,14 @@ import type {
   JournalEntry,
   PortfolioSnapshot,
   DailyPricePoint,
+  DeletedTradeRef,
 } from "@/types";
 
 export default function PriceUpdater() {
-  const { initialize, loaded, setRefreshing } = useStore();
+  const { initialize, loaded, setRefreshing, fetchLatestQuotes, syncToJsonBin } = useStore();
   const initialized = useRef(false);
 
-  // 单次初始化流程：加载远程 → 初始化（不再自动拉取 Alpha Vantage，以手动填写为准）
+  // 单次初始化流程：远程与本地按 uid/日期合并（保留未同步的本地改动）→ 初始化 → 回推 → 自动拉价
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -29,14 +39,18 @@ export default function PriceUpdater() {
 
       try {
         const remote = await readData<{
-          tradeRecords: TradeRecord[];
-          tradePlans: TradePlan[];
-          journalEntries: JournalEntry[];
-          snapshots: PortfolioSnapshot[];
+          tradeRecords?: TradeRecord[];
+          tradePlans?: TradePlan[];
+          journalEntries?: JournalEntry[];
+          snapshots?: PortfolioSnapshot[];
           dailyReturns?: DailyPricePoint[];
+          deletedTradeUids?: DeletedTradeRef[];
+          deletedSnapshotDates?: DeletedTradeRef[];
+          deletedPlanIds?: DeletedTradeRef[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
           baseCash?: number;
+          baseCashUpdatedAt?: number;
         }>();
 
         console.log("[PriceUpdater] JSONBin remote data:", {
@@ -49,30 +63,75 @@ export default function PriceUpdater() {
         });
 
         if (remote) {
+          // ADR-010：过滤掉「未来日期」以及「当日美东时间尚未收盘」的预生成快照/收益。
+          const todayET = getETDate();
+          const marketClosed = isAfterMarketClose();
+          const isFinalized = (date: string) =>
+            date < todayET || (date === todayET && marketClosed);
+
+          // 读取本地（可能含未同步成功的改动），与远程按 uid / 日期 / 墓碑合并，避免丢失本地改动。
+          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localJournals] = await Promise.all([
+            getItem<TradeRecord[]>("tradeRecords"),
+            getItem<DeletedTradeRef[]>("deletedTradeUids"),
+            getItem<PortfolioSnapshot[]>("snapshots"),
+            getItem<DailyPricePoint[]>("dailyReturns"),
+            getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
+            getItem<DeletedTradeRef[]>("deletedPlanIds"),
+            getItem<TradePlan[]>("tradePlans"),
+            getItem<JournalEntry[]>("journalEntries"),
+          ]);
+
+          const tombstones = mergeTombstones(remote.deletedTradeUids ?? [], localTombs ?? []);
+          const snapTombs = mergeTombstones(remote.deletedSnapshotDates ?? [], localSnapTombs ?? []);
+          const planTombs = mergeTombstones(remote.deletedPlanIds ?? [], localPlanTombs ?? []);
+          const mergedRecords = mergeTradeRecords(
+            normalizeTradeRecords(remote.tradeRecords ?? []),
+            normalizeTradeRecords(localRecords ?? []),
+            tombstones
+          );
+          const mergedSnapshots = applyTombstones(
+            mergeSnapshots(
+              (remote.snapshots ?? []).filter((s) => isFinalized(s.date)),
+              (localSnaps ?? []).filter((s) => isFinalized(s.date))
+            ),
+            (x) => x.date,
+            (x) => x.timestamp ?? 0,
+            snapTombs
+          );
+          const mergedPlans = applyTombstones(
+            mergeById(remote.tradePlans ?? [], localPlans ?? []),
+            (x) => x.id,
+            (x) => x.updatedAt ?? 0,
+            planTombs
+          );
+          const mergedJournals = mergeJournalEntries(remote.journalEntries ?? [], localJournals ?? []);
+          const drMap = new Map<string, DailyPricePoint>();
+          for (const d of (remote.dailyReturns ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
+          for (const d of (localDr ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
+          const mergedDr = [...drMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+          await setItem("tradeRecords", mergedRecords);
+          await setItem("deletedTradeUids", tombstones);
+          await setItem("deletedSnapshotDates", snapTombs);
+          await setItem("deletedPlanIds", planTombs);
+          await setItem("snapshots", mergedSnapshots);
+          await setItem("dailyReturns", mergedDr);
+          await setItem("tradePlans", mergedPlans);
+          await setItem("journalEntries", mergedJournals);
+          if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
+          if (remote.baseCashUpdatedAt != null) await setItem("baseCashUpdatedAt", remote.baseCashUpdatedAt);
+
+          const latest = mergedSnapshots[mergedSnapshots.length - 1];
           if (remote.holdings?.length) {
             await setItem("holdings", remote.holdings);
-          } else if (remote.snapshots?.length) {
-            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-            const latest = sorted[sorted.length - 1];
-            if (latest.holdings?.length) {
-              await setItem("holdings", latest.holdings);
-            }
+          } else if (latest?.holdings?.length) {
+            await setItem("holdings", latest.holdings);
           }
           if (remote.optionHoldings?.length) {
             await setItem("optionHoldings", remote.optionHoldings);
-          } else if (remote.snapshots?.length) {
-            const sorted = [...remote.snapshots].sort((a, b) => a.date.localeCompare(b.date));
-            const latest = sorted[sorted.length - 1];
-            if (latest.optionHoldings?.length) {
-              await setItem("optionHoldings", latest.optionHoldings);
-            }
+          } else if (latest?.optionHoldings?.length) {
+            await setItem("optionHoldings", latest.optionHoldings);
           }
-          if (remote.tradeRecords?.length) await setItem("tradeRecords", remote.tradeRecords);
-          if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
-          if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
-          if (remote.snapshots !== undefined) await setItem("snapshots", remote.snapshots);
-          if (remote.dailyReturns !== undefined) await setItem("dailyReturns", remote.dailyReturns);
-          if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
         } else {
           const newBinId = await createBin({
             tradeRecords: [],
@@ -92,6 +151,32 @@ export default function PriceUpdater() {
 
       console.log("[PriceUpdater] calling initialize()");
       await initialize();
+
+      // 若本地存在未成功上传的改动（之前写入失败），加载后立即回推，保证多端可见。
+      try {
+        if (await hasPendingSyncs()) {
+          console.log("[PriceUpdater] flushing pending local changes to JSONBin");
+          await syncToJsonBin();
+        }
+      } catch (e) {
+        console.error("[PriceUpdater] pending flush failed:", e);
+      }
+
+      // 自动从 Alpha Vantage 拉取最新收盘价（已验证数据源准确）。
+      // 节流：每个「已收盘交易日」最多尝试一次，避免触碰免费档每日额度。
+      try {
+        const expected = lastCompletedTradingDayET();
+        const lastSync = await getItem<string>("lastQuoteSync");
+        if (lastSync == null || lastSync < expected) {
+          console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync });
+          await fetchLatestQuotes();
+          await setItem("lastQuoteSync", expected);
+        } else {
+          console.log("[PriceUpdater] quotes already up to date, skip fetch", { expected, lastSync });
+        }
+      } catch (e) {
+        console.error("[PriceUpdater] auto quote fetch failed:", e);
+      }
 
       setRefreshing(false);
     };

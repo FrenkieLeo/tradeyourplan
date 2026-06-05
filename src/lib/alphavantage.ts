@@ -125,3 +125,35 @@ export function isWeekend(): boolean {
   const day = et.getDay();
   return day === 0 || day === 6;
 }
+
+// 一个收盘价是否「已定型」：早于今日(美东)，或就是今日且已收盘。
+// 用于过滤盘中实时价 / 未来日期，避免把未定型数据当成收盘价存入快照。
+export function isFinalizedTradingDate(date: string): boolean {
+  const todayET = getETDate();
+  return date < todayET || (date === todayET && isAfterMarketClose());
+}
+
+// 最近一个「已收盘」的交易日（美东时间，YYYY-MM-DD）。
+// 仅按周末做粗略推算（不含法定节假日），用于节流自动拉取，不参与日期标注——
+// 真正的快照日期一律以 Alpha Vantage 返回的 "latest trading day" 为准。
+export function lastCompletedTradingDayET(): string {
+  const now = new Date();
+  const et = new Date(
+    now.toLocaleString("en-US", { timeZone: "America/New_York" })
+  );
+  const closedToday =
+    et.getDay() !== 0 &&
+    et.getDay() !== 6 &&
+    et.getHours() * 60 + et.getMinutes() >= 16 * 60;
+
+  const cursor = new Date(et.getFullYear(), et.getMonth(), et.getDate());
+  if (!closedToday) cursor.setDate(cursor.getDate() - 1);
+  while (cursor.getDay() === 0 || cursor.getDay() === 6) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  const yy = cursor.getFullYear();
+  const mm = String(cursor.getMonth() + 1).padStart(2, "0");
+  const dd = String(cursor.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
