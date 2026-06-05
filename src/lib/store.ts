@@ -183,6 +183,8 @@ interface AppState {
 
   fetchLatestQuotes: () => Promise<boolean>;
 
+  importData: (raw: unknown) => Promise<void>;
+
   syncToJsonBin: (keepalive?: boolean) => Promise<void>;
 }
 
@@ -1047,6 +1049,51 @@ export const useStore = create<AppState>((set, get) => ({
     get().updateHistoricalPrices(updates);
     await get().syncToJsonBin();
     return true;
+  },
+
+  // 从备份 JSON 恢复：以备份内容覆盖本地与云端（恢复语义）。
+  importData: async (raw) => {
+    const d = (raw ?? {}) as Partial<SyncDoc>;
+    const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+
+    const tradeRecords = normalizeTradeRecords(arr<TradeRecord>(d.tradeRecords));
+    const snapshots = mergeSnapshots(arr<PortfolioSnapshot>(d.snapshots), []);
+    const tradePlans = arr<TradePlan>(d.tradePlans);
+    const journalEntries = arr<JournalEntry>(d.journalEntries);
+    const dailyReturns = arr<DailyReturn>(d.dailyReturns);
+    const deletedTradeUids = arr<DeletedTradeRef>(d.deletedTradeUids);
+    const deletedSnapshotDates = arr<DeletedTradeRef>(d.deletedSnapshotDates);
+    const deletedPlanIds = arr<DeletedTradeRef>(d.deletedPlanIds);
+    const baseCash = typeof d.baseCash === "number" ? d.baseCash : get().baseCash;
+    const baseCashUpdatedAt = Date.now();
+
+    const { holdings, optionHoldings } = deriveHoldings(tradeRecords, snapshots);
+    const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + calcTradeCashAdjustment(tradeRecords) };
+
+    set({
+      tradeRecords, snapshots, tradePlans, journalEntries, dailyReturns,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds,
+      baseCash, baseCashUpdatedAt, holdings, optionHoldings, cash,
+      activeSnapshotIndex: null,
+    });
+    setItem("tradeRecords", tradeRecords);
+    setItem("snapshots", snapshots);
+    setItem("tradePlans", tradePlans);
+    setItem("journalEntries", journalEntries);
+    setItem("dailyReturns", dailyReturns);
+    setItem("deletedTradeUids", deletedTradeUids);
+    setItem("deletedSnapshotDates", deletedSnapshotDates);
+    setItem("deletedPlanIds", deletedPlanIds);
+    setItem("baseCash", baseCash);
+    setItem("baseCashUpdatedAt", baseCashUpdatedAt);
+
+    // 恢复语义：直接覆盖云端，而非合并。
+    const doc: SyncDoc = {
+      tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds,
+      baseCash, baseCashUpdatedAt, holdings, optionHoldings, updatedAt: Date.now(),
+    };
+    await writeData(doc);
   },
 
   syncToJsonBin: async (keepalive = false) => {

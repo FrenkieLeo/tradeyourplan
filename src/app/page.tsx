@@ -8,6 +8,7 @@ import OptionChart from "@/components/OptionChart";
 import TradePlan from "@/components/TradePlan";
 import TimelineSlider from "@/components/TimelineSlider";
 import PriceUpdater from "@/components/PriceUpdater";
+import DataBackup from "@/components/DataBackup";
 
 export default function Home() {
   const { holdings, optionHoldings, loaded, syncToJsonBin, isRefreshing } = useStore();
@@ -41,6 +42,7 @@ export default function Home() {
           <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
             <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
               <h1 className="text-lg font-bold text-[var(--tv-text)]">TradeYourPlan</h1>
+              <DataBackup />
             </div>
           </header>
 
