@@ -90,6 +90,28 @@ export async function fetchWeeklyKlines(
   }
 }
 
+// 拉取日线收盘价（用于基准对比）。返回 { 'YYYY-MM-DD': close }。
+export async function fetchDailyCloses(symbol: string): Promise<Record<string, number>> {
+  try {
+    const res = await fetch(
+      `/api/av?fn=TIME_SERIES_DAILY&symbol=${encodeURIComponent(symbol)}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) return {};
+    const data = await res.json();
+    const series = data["Time Series (Daily)"];
+    if (!series) return {};
+    const out: Record<string, number> = {};
+    for (const [date, v] of Object.entries(series)) {
+      const close = parseFloat((v as Record<string, string>)["4. close"]);
+      if (!isNaN(close)) out[date] = close;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export function getETDate(): string {
   const now = new Date();
   return now.toLocaleDateString("en-CA", { timeZone: "America/New_York" });

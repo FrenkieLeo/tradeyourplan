@@ -10,6 +10,7 @@ import TimelineSlider from "@/components/TimelineSlider";
 import PriceUpdater from "@/components/PriceUpdater";
 import DataBackup from "@/components/DataBackup";
 import AllocationChart from "@/components/AllocationChart";
+import BenchmarkChart from "@/components/BenchmarkChart";
 
 export default function Home() {
   const { holdings, optionHoldings, loaded, syncToJsonBin, isRefreshing } = useStore();
@@ -50,6 +51,7 @@ export default function Home() {
           <main className="mx-auto max-w-5xl px-4 py-6 space-y-6">
             <TimelineSlider />
             <TotalPortfolio />
+            <BenchmarkChart />
             <AllocationChart />
 
             {holdings.length > 0 && (

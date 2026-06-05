@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 const BASE_URL = "https://www.alphavantage.co/query";
 const API_KEY = process.env.ALPHAVANTAGE_API_KEY ?? "RJFNH4AQQR0KXNKT";
 
-const ALLOWED_FN = new Set(["GLOBAL_QUOTE", "TIME_SERIES_WEEKLY"]);
+const ALLOWED_FN = new Set(["GLOBAL_QUOTE", "TIME_SERIES_WEEKLY", "TIME_SERIES_DAILY"]);
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
