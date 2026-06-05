@@ -2,9 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import { useStore } from "@/lib/store";
-import { getETDate, isAfterMarketClose } from "@/lib/alphavantage";
+import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
-import { setItem } from "@/lib/db";
+import { getItem, setItem } from "@/lib/db";
 import type {
   StockHolding,
   OptionHolding,
@@ -16,7 +16,7 @@ import type {
 } from "@/types";
 
 export default function PriceUpdater() {
-  const { initialize, loaded, setRefreshing } = useStore();
+  const { initialize, loaded, setRefreshing, fetchLatestQuotes } = useStore();
   const initialized = useRef(false);
 
   // 单次初始化流程：加载远程 → 初始化（不再自动拉取 Alpha Vantage，以手动填写为准）
@@ -110,6 +110,22 @@ export default function PriceUpdater() {
 
       console.log("[PriceUpdater] calling initialize()");
       await initialize();
+
+      // 自动从 Alpha Vantage 拉取最新收盘价（已验证数据源准确）。
+      // 节流：每个「已收盘交易日」最多尝试一次，避免触碰免费档每日额度。
+      try {
+        const expected = lastCompletedTradingDayET();
+        const lastSync = await getItem<string>("lastQuoteSync");
+        if (lastSync == null || lastSync < expected) {
+          console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync });
+          await fetchLatestQuotes();
+          await setItem("lastQuoteSync", expected);
+        } else {
+          console.log("[PriceUpdater] quotes already up to date, skip fetch", { expected, lastSync });
+        }
+      } catch (e) {
+        console.error("[PriceUpdater] auto quote fetch failed:", e);
+      }
 
       setRefreshing(false);
     };

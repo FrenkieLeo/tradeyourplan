@@ -10,6 +10,7 @@ import type {
 } from "@/types";
 import { getItem, setItem, markPendingSync, clearAllPendingSyncs } from "./db";
 import { writeData } from "./jsonbin";
+import { fetchQuote, isFinalizedTradingDate } from "./alphavantage";
 
 interface AppState {
   holdings: StockHolding[];
@@ -53,6 +54,8 @@ interface AppState {
   setActiveSnapshot: (index: number | null) => void;
 
   setRefreshing: (refreshing: boolean) => void;
+
+  fetchLatestQuotes: () => Promise<boolean>;
 
   syncToJsonBin: (keepalive?: boolean) => Promise<void>;
 }
@@ -889,6 +892,34 @@ export const useStore = create<AppState>((set, get) => ({
 
   setRefreshing: (refreshing) => {
     set({ isRefreshing: refreshing });
+  },
+
+  // 从 Alpha Vantage 拉取各股票最新收盘价，按接口返回的「latest trading day」标注日期，
+  // 仅采纳已定型（收盘后/历史）的报价，避免把盘中实时价写入快照。
+  // 返回是否实际写入了更新，便于调用方决定是否记录节流标记。
+  fetchLatestQuotes: async () => {
+    const stocks = get().holdings;
+    if (stocks.length === 0) return false;
+
+    const updates: { date: string; id: string; value: number; type: "stock" }[] = [];
+    for (const h of stocks) {
+      const quote = await fetchQuote(h.id);
+      if (
+        quote &&
+        quote.price > 0 &&
+        quote.latestTradingDay &&
+        isFinalizedTradingDate(quote.latestTradingDay)
+      ) {
+        updates.push({ date: quote.latestTradingDay, id: h.id, value: quote.price, type: "stock" });
+      }
+      // 尊重免费档突发限制（约 1 次/秒）
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    if (updates.length === 0) return false;
+    get().updateHistoricalPrices(updates);
+    await get().syncToJsonBin();
+    return true;
   },
 
   syncToJsonBin: async (keepalive = false) => {
