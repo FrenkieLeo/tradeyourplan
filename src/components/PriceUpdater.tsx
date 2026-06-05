@@ -10,6 +10,7 @@ import {
   mergeById,
   mergeJournalEntries,
   applyTombstones,
+  mergeUidList,
 } from "@/lib/store";
 import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
@@ -23,6 +24,7 @@ import type {
   PortfolioSnapshot,
   DailyPricePoint,
   DeletedTradeRef,
+  CashTransaction,
 } from "@/types";
 
 export default function PriceUpdater() {
@@ -44,9 +46,11 @@ export default function PriceUpdater() {
           journalEntries?: JournalEntry[];
           snapshots?: PortfolioSnapshot[];
           dailyReturns?: DailyPricePoint[];
+          cashTransactions?: CashTransaction[];
           deletedTradeUids?: DeletedTradeRef[];
           deletedSnapshotDates?: DeletedTradeRef[];
           deletedPlanIds?: DeletedTradeRef[];
+          deletedCashTxUids?: DeletedTradeRef[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
           baseCash?: number;
@@ -70,7 +74,7 @@ export default function PriceUpdater() {
             date < todayET || (date === todayET && marketClosed);
 
           // 读取本地（可能含未同步成功的改动），与远程按 uid / 日期 / 墓碑合并，避免丢失本地改动。
-          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localJournals] = await Promise.all([
+          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localJournals, localCashTxs, localCashTxTombs] = await Promise.all([
             getItem<TradeRecord[]>("tradeRecords"),
             getItem<DeletedTradeRef[]>("deletedTradeUids"),
             getItem<PortfolioSnapshot[]>("snapshots"),
@@ -79,11 +83,15 @@ export default function PriceUpdater() {
             getItem<DeletedTradeRef[]>("deletedPlanIds"),
             getItem<TradePlan[]>("tradePlans"),
             getItem<JournalEntry[]>("journalEntries"),
+            getItem<CashTransaction[]>("cashTransactions"),
+            getItem<DeletedTradeRef[]>("deletedCashTxUids"),
           ]);
 
           const tombstones = mergeTombstones(remote.deletedTradeUids ?? [], localTombs ?? []);
           const snapTombs = mergeTombstones(remote.deletedSnapshotDates ?? [], localSnapTombs ?? []);
           const planTombs = mergeTombstones(remote.deletedPlanIds ?? [], localPlanTombs ?? []);
+          const cashTxTombs = mergeTombstones(remote.deletedCashTxUids ?? [], localCashTxTombs ?? []);
+          const mergedCashTxs = mergeUidList(remote.cashTransactions ?? [], localCashTxs ?? [], cashTxTombs);
           const mergedRecords = mergeTradeRecords(
             normalizeTradeRecords(remote.tradeRecords ?? []),
             normalizeTradeRecords(localRecords ?? []),
@@ -114,10 +122,12 @@ export default function PriceUpdater() {
           await setItem("deletedTradeUids", tombstones);
           await setItem("deletedSnapshotDates", snapTombs);
           await setItem("deletedPlanIds", planTombs);
+          await setItem("deletedCashTxUids", cashTxTombs);
           await setItem("snapshots", mergedSnapshots);
           await setItem("dailyReturns", mergedDr);
           await setItem("tradePlans", mergedPlans);
           await setItem("journalEntries", mergedJournals);
+          await setItem("cashTransactions", mergedCashTxs);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
           if (remote.baseCashUpdatedAt != null) await setItem("baseCashUpdatedAt", remote.baseCashUpdatedAt);
 

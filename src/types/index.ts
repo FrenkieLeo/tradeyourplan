@@ -51,6 +51,18 @@ export interface DeletedTradeRef {
   deletedAt: number;
 }
 
+// 现金流水：入金/出金/分红/利息/手续费。amount 恒为正，方向由 type 决定。
+export type CashTxType = "DEPOSIT" | "WITHDRAW" | "DIVIDEND" | "INTEREST" | "FEE";
+export interface CashTransaction {
+  uid: string;
+  type: CashTxType;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  note?: string;
+  symbol?: string;
+  updatedAt?: number;
+}
+
 export interface CashReserve {
   id: "cash";
   name: "现金";

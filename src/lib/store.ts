@@ -8,6 +8,7 @@ import type {
   PortfolioSnapshot,
   TradePlan,
   DeletedTradeRef,
+  CashTransaction,
 } from "@/types";
 import { getItem, setItem, markPendingSync, clearAllPendingSyncs } from "./db";
 import { writeData, readData } from "./jsonbin";
@@ -124,9 +125,11 @@ interface SyncDoc {
   journalEntries: JournalEntry[];
   snapshots: PortfolioSnapshot[];
   dailyReturns: DailyReturn[];
+  cashTransactions: CashTransaction[];
   deletedTradeUids: DeletedTradeRef[];
   deletedSnapshotDates: DeletedTradeRef[];
   deletedPlanIds: DeletedTradeRef[];
+  deletedCashTxUids: DeletedTradeRef[];
   baseCash: number;
   baseCashUpdatedAt: number;
   holdings: StockHolding[];
@@ -147,9 +150,11 @@ interface AppState {
 
   snapshots: PortfolioSnapshot[];
   dailyReturns: { date: string; return: number }[];
+  cashTransactions: CashTransaction[];
   deletedTradeUids: DeletedTradeRef[];
   deletedSnapshotDates: DeletedTradeRef[];
   deletedPlanIds: DeletedTradeRef[];
+  deletedCashTxUids: DeletedTradeRef[];
   baseCashUpdatedAt: number;
   activeSnapshotIndex: number | null;
 
@@ -167,6 +172,9 @@ interface AppState {
   updateOptionHolding: (id: string, updates: Partial<OptionHolding>) => void;
 
   updateCash: (total: number) => void;
+
+  addCashTransaction: (tx: CashTransaction) => void;
+  removeCashTransaction: (uid: string) => void;
 
   addTradePlan: (plan: TradePlan) => void;
   updateTradePlan: (id: string, plan: Partial<TradePlan>) => void;
@@ -216,6 +224,39 @@ export function calcRealizedPnl(records: TradeRecord[]): { total: number; bySymb
   }
   for (const k of Object.keys(bySymbol)) bySymbol[k] = parseFloat(bySymbol[k].toFixed(2));
   return { total: parseFloat(total.toFixed(2)), bySymbol };
+}
+
+// 现金流水对现金的净影响：入金/分红/利息为正，出金/手续费为负。
+function calcCashTxAdjustment(txs: CashTransaction[]): number {
+  let adj = 0;
+  for (const t of txs) {
+    const a = Math.abs(t.amount) || 0;
+    if (t.type === "DEPOSIT" || t.type === "DIVIDEND" || t.type === "INTEREST") adj += a;
+    else adj -= a; // WITHDRAW / FEE
+  }
+  return adj;
+}
+
+// 通用：按 uid 合并列表（updatedAt 较新者胜）并剔除墓碑，用于现金流水等。
+export function mergeUidList<T extends { uid: string; updatedAt?: number }>(
+  a: T[],
+  b: T[],
+  tombstones: DeletedTradeRef[]
+): T[] {
+  const map = new Map<string, T>();
+  for (const r of [...a, ...b]) {
+    const ex = map.get(r.uid);
+    if (!ex || (r.updatedAt ?? 0) >= (ex.updatedAt ?? 0)) map.set(r.uid, r);
+  }
+  const tmap = new Map<string, number>();
+  for (const t of tombstones) tmap.set(t.uid, Math.max(tmap.get(t.uid) ?? 0, t.deletedAt));
+  const out: T[] = [];
+  for (const r of map.values()) {
+    const d = tmap.get(r.uid);
+    if (d != null && d >= (r.updatedAt ?? 0)) continue;
+    out.push(r);
+  }
+  return out;
 }
 
 function calcTradeCashAdjustment(records: TradeRecord[]): number {
@@ -568,16 +609,18 @@ export const useStore = create<AppState>((set, get) => ({
   journalEntries: [],
   snapshots: [],
   dailyReturns: [],
+  cashTransactions: [],
   deletedTradeUids: [],
   deletedSnapshotDates: [],
   deletedPlanIds: [],
+  deletedCashTxUids: [],
   baseCashUpdatedAt: 0,
   activeSnapshotIndex: null,
   loaded: false,
   isRefreshing: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt, storedSnapTombs, storedPlanTombs] = await Promise.all([
+    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt, storedSnapTombs, storedPlanTombs, storedCashTxs, storedCashTxTombs] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
       getItem<JournalEntry[]>("journalEntries"),
@@ -590,6 +633,8 @@ export const useStore = create<AppState>((set, get) => ({
       getItem<number>("baseCashUpdatedAt"),
       getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
       getItem<DeletedTradeRef[]>("deletedPlanIds"),
+      getItem<CashTransaction[]>("cashTransactions"),
+      getItem<DeletedTradeRef[]>("deletedCashTxUids"),
     ]);
 
     console.log("[initialize] raw data from IndexedDB:", {
@@ -603,6 +648,8 @@ export const useStore = create<AppState>((set, get) => ({
     const deletedTradeUids = storedTombstones ?? [];
     const deletedSnapshotDates = storedSnapTombs ?? [];
     const deletedPlanIds = storedPlanTombs ?? [];
+    const deletedCashTxUids = storedCashTxTombs ?? [];
+    const cashTransactions = mergeUidList(storedCashTxs ?? [], [], deletedCashTxUids);
     const tradeRecords = mergeTradeRecords(normalizeTradeRecords(records ?? []), [], deletedTradeUids);
     const tradePlans: TradePlan[] = applyTombstones(
       (plans ?? []).map((p: any) => {
@@ -649,8 +696,7 @@ export const useStore = create<AppState>((set, get) => ({
       holdingIds: holdings.map((h) => h.id),
       snapshotDates: snapshots.map((s) => s.date),
     });
-    const cashAdj = calcTradeCashAdjustment(tradeRecords);
-    const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + cashAdj };
+    const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + calcTradeCashAdjustment(tradeRecords) + calcCashTxAdjustment(cashTransactions) };
 
     set({
       tradeRecords,
@@ -658,9 +704,11 @@ export const useStore = create<AppState>((set, get) => ({
       journalEntries,
       snapshots,
       dailyReturns: storedDr ?? [],
+      cashTransactions,
       deletedTradeUids,
       deletedSnapshotDates,
       deletedPlanIds,
+      deletedCashTxUids,
       baseCashUpdatedAt: storedBaseCashUpdatedAt ?? 0,
       baseCash,
       holdings,
@@ -673,7 +721,7 @@ export const useStore = create<AppState>((set, get) => ({
   addTradeRecord: (record) => {
     const rec: TradeRecord = { ...record, uid: record.uid || newUid(), updatedAt: Date.now() };
     const records = [...get().tradeRecords, rec];
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) + calcCashTxAdjustment(get().cashTransactions) };
     const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
     set({ tradeRecords: records, holdings, optionHoldings, cash });
@@ -686,7 +734,7 @@ export const useStore = create<AppState>((set, get) => ({
   removeTradeRecord: (uid) => {
     const records = get().tradeRecords.filter((r) => r.uid !== uid);
     const deletedTradeUids = mergeTombstones(get().deletedTradeUids, [{ uid, deletedAt: Date.now() }]);
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) + calcCashTxAdjustment(get().cashTransactions) };
     const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
     set({ tradeRecords: records, deletedTradeUids, holdings, optionHoldings, cash });
@@ -702,7 +750,7 @@ export const useStore = create<AppState>((set, get) => ({
     const records = get().tradeRecords.map((r) =>
       r.uid === uid ? { ...record, uid, updatedAt: Date.now() } : r
     );
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) + calcCashTxAdjustment(get().cashTransactions) };
     const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
     set({ tradeRecords: records, holdings, optionHoldings, cash });
@@ -801,14 +849,36 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   updateCash: (total) => {
-    const cashAdj = calcTradeCashAdjustment(get().tradeRecords);
-    const baseCash = total - cashAdj;
+    const adj = calcTradeCashAdjustment(get().tradeRecords) + calcCashTxAdjustment(get().cashTransactions);
+    const baseCash = total - adj;
     const baseCashUpdatedAt = Date.now();
     const cash: CashReserve = { id: "cash", name: "现金", total };
     set({ baseCash, baseCashUpdatedAt, cash });
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);
     markPendingSync("baseCash", baseCash);
+    get().syncToJsonBin();
+  },
+
+  addCashTransaction: (tx) => {
+    const rec: CashTransaction = { ...tx, uid: tx.uid || newUid(), updatedAt: Date.now() };
+    const cashTransactions = [...get().cashTransactions, rec];
+    const cash: CashReserve = { id: "cash", name: "现金", total: get().baseCash + calcTradeCashAdjustment(get().tradeRecords) + calcCashTxAdjustment(cashTransactions) };
+    set({ cashTransactions, cash });
+    setItem("cashTransactions", cashTransactions);
+    markPendingSync("cashTransactions", cashTransactions);
+    get().syncToJsonBin();
+  },
+
+  removeCashTransaction: (uid) => {
+    const cashTransactions = get().cashTransactions.filter((t) => t.uid !== uid);
+    const deletedCashTxUids = mergeTombstones(get().deletedCashTxUids, [{ uid, deletedAt: Date.now() }]);
+    const cash: CashReserve = { id: "cash", name: "现金", total: get().baseCash + calcTradeCashAdjustment(get().tradeRecords) + calcCashTxAdjustment(cashTransactions) };
+    set({ cashTransactions, deletedCashTxUids, cash });
+    setItem("cashTransactions", cashTransactions);
+    setItem("deletedCashTxUids", deletedCashTxUids);
+    markPendingSync("cashTransactions", cashTransactions);
+    markPendingSync("deletedCashTxUids", deletedCashTxUids);
     get().syncToJsonBin();
   },
 
@@ -1091,18 +1161,20 @@ export const useStore = create<AppState>((set, get) => ({
     const tradePlans = arr<TradePlan>(d.tradePlans);
     const journalEntries = arr<JournalEntry>(d.journalEntries);
     const dailyReturns = arr<DailyReturn>(d.dailyReturns);
+    const cashTransactions = arr<CashTransaction>(d.cashTransactions);
     const deletedTradeUids = arr<DeletedTradeRef>(d.deletedTradeUids);
     const deletedSnapshotDates = arr<DeletedTradeRef>(d.deletedSnapshotDates);
     const deletedPlanIds = arr<DeletedTradeRef>(d.deletedPlanIds);
+    const deletedCashTxUids = arr<DeletedTradeRef>(d.deletedCashTxUids);
     const baseCash = typeof d.baseCash === "number" ? d.baseCash : get().baseCash;
     const baseCashUpdatedAt = Date.now();
 
     const { holdings, optionHoldings } = deriveHoldings(tradeRecords, snapshots);
-    const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + calcTradeCashAdjustment(tradeRecords) };
+    const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + calcTradeCashAdjustment(tradeRecords) + calcCashTxAdjustment(cashTransactions) };
 
     set({
-      tradeRecords, snapshots, tradePlans, journalEntries, dailyReturns,
-      deletedTradeUids, deletedSnapshotDates, deletedPlanIds,
+      tradeRecords, snapshots, tradePlans, journalEntries, dailyReturns, cashTransactions,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedCashTxUids,
       baseCash, baseCashUpdatedAt, holdings, optionHoldings, cash,
       activeSnapshotIndex: null,
     });
@@ -1111,16 +1183,18 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("tradePlans", tradePlans);
     setItem("journalEntries", journalEntries);
     setItem("dailyReturns", dailyReturns);
+    setItem("cashTransactions", cashTransactions);
     setItem("deletedTradeUids", deletedTradeUids);
     setItem("deletedSnapshotDates", deletedSnapshotDates);
     setItem("deletedPlanIds", deletedPlanIds);
+    setItem("deletedCashTxUids", deletedCashTxUids);
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);
 
     // 恢复语义：直接覆盖云端，而非合并。
     const doc: SyncDoc = {
-      tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns,
-      deletedTradeUids, deletedSnapshotDates, deletedPlanIds,
+      tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, cashTransactions,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedCashTxUids,
       baseCash, baseCashUpdatedAt, holdings, optionHoldings, updatedAt: Date.now(),
     };
     await writeData(doc);
@@ -1137,9 +1211,11 @@ export const useStore = create<AppState>((set, get) => ({
         journalEntries: s.journalEntries,
         snapshots: s.snapshots,
         dailyReturns: s.dailyReturns,
+        cashTransactions: s.cashTransactions,
         deletedTradeUids: s.deletedTradeUids,
         deletedSnapshotDates: s.deletedSnapshotDates,
         deletedPlanIds: s.deletedPlanIds,
+        deletedCashTxUids: s.deletedCashTxUids,
         baseCash: s.baseCash,
         baseCashUpdatedAt: s.baseCashUpdatedAt,
         holdings: s.holdings,
@@ -1167,6 +1243,12 @@ export const useStore = create<AppState>((set, get) => ({
     const planTombs = remote
       ? mergeTombstones(remote.deletedPlanIds ?? [], s.deletedPlanIds)
       : s.deletedPlanIds;
+    const cashTxTombs = remote
+      ? mergeTombstones(remote.deletedCashTxUids ?? [], s.deletedCashTxUids)
+      : s.deletedCashTxUids;
+    const cashTransactions = remote
+      ? mergeUidList(remote.cashTransactions ?? [], s.cashTransactions, cashTxTombs)
+      : s.cashTransactions;
     const tradeRecords = remote
       ? mergeTradeRecords(normalizeTradeRecords(remote.tradeRecords ?? []), s.tradeRecords, tombstones)
       : s.tradeRecords;
@@ -1186,7 +1268,7 @@ export const useStore = create<AppState>((set, get) => ({
     const cash: CashReserve = {
       id: "cash",
       name: "现金",
-      total: baseCash + calcTradeCashAdjustment(tradeRecords),
+      total: baseCash + calcTradeCashAdjustment(tradeRecords) + calcCashTxAdjustment(cashTransactions),
     };
 
     const doc: SyncDoc = {
@@ -1195,9 +1277,11 @@ export const useStore = create<AppState>((set, get) => ({
       journalEntries,
       snapshots,
       dailyReturns,
+      cashTransactions,
       deletedTradeUids: tombstones,
       deletedSnapshotDates: snapTombs,
       deletedPlanIds: planTombs,
+      deletedCashTxUids: cashTxTombs,
       baseCash,
       baseCashUpdatedAt,
       holdings,
@@ -1221,9 +1305,11 @@ export const useStore = create<AppState>((set, get) => ({
       journalEntries,
       snapshots,
       dailyReturns,
+      cashTransactions,
       deletedTradeUids: tombstones,
       deletedSnapshotDates: snapTombs,
       deletedPlanIds: planTombs,
+      deletedCashTxUids: cashTxTombs,
       baseCash,
       baseCashUpdatedAt,
       holdings,
@@ -1235,9 +1321,11 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("journalEntries", journalEntries);
     setItem("snapshots", snapshots);
     setItem("dailyReturns", dailyReturns);
+    setItem("cashTransactions", cashTransactions);
     setItem("deletedTradeUids", tombstones);
     setItem("deletedSnapshotDates", snapTombs);
     setItem("deletedPlanIds", planTombs);
+    setItem("deletedCashTxUids", cashTxTombs);
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);
   },
