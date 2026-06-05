@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 // 优先读环境变量（推荐在 Vercel 配置）；未设置时回退到既有值以保证不中断。
 // 环境变量名：JSONBIN_BIN_ID、JSONBIN_API_KEY
 const JSONBIN_BASE = "https://api.jsonbin.io/v3";
-const BIN_ID = process.env.JSONBIN_BIN_ID ?? "6a1d973021f9ee59d2a5a28b";
+// v2 bin：与旧版客户端隔离。旧缓存页面仍直连旧 bin（6a1d97...），已不再影响这里。
+const BIN_ID = process.env.JSONBIN_BIN_ID ?? "6a22c66fda38895dfe8c3cd4";
 const API_KEY =
   process.env.JSONBIN_API_KEY ??
   "$2a$10$0y9bxoYUBgPfUb7kUXSaq.YEHt140BVrcYTw.O4BJjYIiCNp6sm0S";
