@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useStore } from "@/lib/store";
+import {
+  useStore,
+  normalizeTradeRecords,
+  mergeTradeRecords,
+  mergeTombstones,
+  mergeSnapshots,
+} from "@/lib/store";
 import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
-import { getItem, setItem } from "@/lib/db";
+import { getItem, setItem, hasPendingSyncs } from "@/lib/db";
 import type {
   StockHolding,
   OptionHolding,
@@ -13,13 +19,14 @@ import type {
   JournalEntry,
   PortfolioSnapshot,
   DailyPricePoint,
+  DeletedTradeRef,
 } from "@/types";
 
 export default function PriceUpdater() {
-  const { initialize, loaded, setRefreshing, fetchLatestQuotes } = useStore();
+  const { initialize, loaded, setRefreshing, fetchLatestQuotes, syncToJsonBin } = useStore();
   const initialized = useRef(false);
 
-  // 单次初始化流程：加载远程 → 初始化（不再自动拉取 Alpha Vantage，以手动填写为准）
+  // 单次初始化流程：远程与本地按 uid/日期合并（保留未同步的本地改动）→ 初始化 → 回推 → 自动拉价
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -29,14 +36,16 @@ export default function PriceUpdater() {
 
       try {
         const remote = await readData<{
-          tradeRecords: TradeRecord[];
-          tradePlans: TradePlan[];
-          journalEntries: JournalEntry[];
-          snapshots: PortfolioSnapshot[];
+          tradeRecords?: TradeRecord[];
+          tradePlans?: TradePlan[];
+          journalEntries?: JournalEntry[];
+          snapshots?: PortfolioSnapshot[];
           dailyReturns?: DailyPricePoint[];
+          deletedTradeUids?: DeletedTradeRef[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
           baseCash?: number;
+          baseCashUpdatedAt?: number;
         }>();
 
         console.log("[PriceUpdater] JSONBin remote data:", {
@@ -49,48 +58,55 @@ export default function PriceUpdater() {
         });
 
         if (remote) {
-          // ADR-010：过滤掉「未来日期」以及「当日美东时间尚未收盘」的预生成快照/收益，
-          // 只有美东收盘后定型的数据才允许进入本地存储与展示；同时按日期去重。
+          // ADR-010：过滤掉「未来日期」以及「当日美东时间尚未收盘」的预生成快照/收益。
           const todayET = getETDate();
           const marketClosed = isAfterMarketClose();
           const isFinalized = (date: string) =>
             date < todayET || (date === todayET && marketClosed);
 
-          const cleanSnapshots = remote.snapshots
-            ? [
-                ...new Map(
-                  remote.snapshots
-                    .filter((s) => isFinalized(s.date))
-                    .map((s) => [s.date, s])
-                ).values(),
-              ].sort((a, b) => a.date.localeCompare(b.date))
-            : undefined;
-          const cleanDailyReturns = remote.dailyReturns
-            ? remote.dailyReturns.filter((d) => isFinalized(d.date))
-            : undefined;
+          // 读取本地（可能含未同步成功的改动），与远程按 uid / 日期 / 墓碑合并，避免丢失本地改动。
+          const [localRecords, localTombs, localSnaps, localDr] = await Promise.all([
+            getItem<TradeRecord[]>("tradeRecords"),
+            getItem<DeletedTradeRef[]>("deletedTradeUids"),
+            getItem<PortfolioSnapshot[]>("snapshots"),
+            getItem<DailyPricePoint[]>("dailyReturns"),
+          ]);
 
+          const tombstones = mergeTombstones(remote.deletedTradeUids ?? [], localTombs ?? []);
+          const mergedRecords = mergeTradeRecords(
+            normalizeTradeRecords(remote.tradeRecords ?? []),
+            normalizeTradeRecords(localRecords ?? []),
+            tombstones
+          );
+          const mergedSnapshots = mergeSnapshots(
+            (remote.snapshots ?? []).filter((s) => isFinalized(s.date)),
+            (localSnaps ?? []).filter((s) => isFinalized(s.date))
+          );
+          const drMap = new Map<string, DailyPricePoint>();
+          for (const d of (remote.dailyReturns ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
+          for (const d of (localDr ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
+          const mergedDr = [...drMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+          await setItem("tradeRecords", mergedRecords);
+          await setItem("deletedTradeUids", tombstones);
+          await setItem("snapshots", mergedSnapshots);
+          await setItem("dailyReturns", mergedDr);
+          if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
+          if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
+          if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
+          if (remote.baseCashUpdatedAt != null) await setItem("baseCashUpdatedAt", remote.baseCashUpdatedAt);
+
+          const latest = mergedSnapshots[mergedSnapshots.length - 1];
           if (remote.holdings?.length) {
             await setItem("holdings", remote.holdings);
-          } else if (cleanSnapshots?.length) {
-            const latest = cleanSnapshots[cleanSnapshots.length - 1];
-            if (latest.holdings?.length) {
-              await setItem("holdings", latest.holdings);
-            }
+          } else if (latest?.holdings?.length) {
+            await setItem("holdings", latest.holdings);
           }
           if (remote.optionHoldings?.length) {
             await setItem("optionHoldings", remote.optionHoldings);
-          } else if (cleanSnapshots?.length) {
-            const latest = cleanSnapshots[cleanSnapshots.length - 1];
-            if (latest.optionHoldings?.length) {
-              await setItem("optionHoldings", latest.optionHoldings);
-            }
+          } else if (latest?.optionHoldings?.length) {
+            await setItem("optionHoldings", latest.optionHoldings);
           }
-          if (remote.tradeRecords?.length) await setItem("tradeRecords", remote.tradeRecords);
-          if (remote.tradePlans?.length) await setItem("tradePlans", remote.tradePlans);
-          if (remote.journalEntries?.length) await setItem("journalEntries", remote.journalEntries);
-          if (cleanSnapshots !== undefined) await setItem("snapshots", cleanSnapshots);
-          if (cleanDailyReturns !== undefined) await setItem("dailyReturns", cleanDailyReturns);
-          if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
         } else {
           const newBinId = await createBin({
             tradeRecords: [],
@@ -110,6 +126,16 @@ export default function PriceUpdater() {
 
       console.log("[PriceUpdater] calling initialize()");
       await initialize();
+
+      // 若本地存在未成功上传的改动（之前写入失败），加载后立即回推，保证多端可见。
+      try {
+        if (await hasPendingSyncs()) {
+          console.log("[PriceUpdater] flushing pending local changes to JSONBin");
+          await syncToJsonBin();
+        }
+      } catch (e) {
+        console.error("[PriceUpdater] pending flush failed:", e);
+      }
 
       // 自动从 Alpha Vantage 拉取最新收盘价（已验证数据源准确）。
       // 节流：每个「已收盘交易日」最多尝试一次，避免触碰免费档每日额度。

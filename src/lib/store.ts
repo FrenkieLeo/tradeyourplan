@@ -7,10 +7,107 @@ import type {
   JournalEntry,
   PortfolioSnapshot,
   TradePlan,
+  DeletedTradeRef,
 } from "@/types";
 import { getItem, setItem, markPendingSync, clearAllPendingSyncs } from "./db";
-import { writeData } from "./jsonbin";
+import { writeData, readData } from "./jsonbin";
 import { fetchQuote, isFinalizedTradingDate } from "./alphavantage";
+
+// 生成跨设备唯一的交易 uid。
+function newUid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `t-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// 为缺少 uid 的历史交易补齐稳定 uid（基于内容 + 出现次序，保证各设备迁移结果一致）。
+export function normalizeTradeRecords(records: TradeRecord[]): TradeRecord[] {
+  const counts = new Map<string, number>();
+  return records.map((r) => {
+    const updatedAt = r.updatedAt ?? r.tradeTime ?? 0;
+    if (r.uid) return { ...r, updatedAt };
+    const sig = `${r.id}|${r.assetType ?? "STOCK"}|${r.tradeTime}|${r.number}|${r.price}|${r.cost}`;
+    const n = counts.get(sig) ?? 0;
+    counts.set(sig, n + 1);
+    return { ...r, uid: `mig-${sig}-${n}`, updatedAt };
+  });
+}
+
+export function mergeTombstones(a: DeletedTradeRef[], b: DeletedTradeRef[]): DeletedTradeRef[] {
+  const map = new Map<string, number>();
+  for (const t of [...a, ...b]) {
+    map.set(t.uid, Math.max(map.get(t.uid) ?? 0, t.deletedAt));
+  }
+  return [...map.entries()].map(([uid, deletedAt]) => ({ uid, deletedAt }));
+}
+
+// 按 uid 合并两侧交易记录：同一 uid 取 updatedAt 较大者；再剔除被墓碑删除的记录
+// （仅当墓碑时间不早于记录更新时间，从而支持「删除后重新添加」）。结果按时间排序。
+export function mergeTradeRecords(
+  a: TradeRecord[],
+  b: TradeRecord[],
+  tombstones: DeletedTradeRef[]
+): TradeRecord[] {
+  const map = new Map<string, TradeRecord>();
+  for (const r of [...a, ...b]) {
+    const ex = map.get(r.uid);
+    if (!ex || (r.updatedAt ?? 0) >= (ex.updatedAt ?? 0)) map.set(r.uid, r);
+  }
+  const tmap = new Map<string, number>();
+  for (const t of tombstones) tmap.set(t.uid, Math.max(tmap.get(t.uid) ?? 0, t.deletedAt));
+  const out: TradeRecord[] = [];
+  for (const r of map.values()) {
+    const d = tmap.get(r.uid);
+    if (d != null && d >= (r.updatedAt ?? 0)) continue;
+    out.push(r);
+  }
+  out.sort((x, y) => x.tradeTime - y.tradeTime || (x.updatedAt ?? 0) - (y.updatedAt ?? 0));
+  return out;
+}
+
+// 按日期合并快照，冲突时取 timestamp 较新者，避免过期客户端覆盖更新数据。
+export function mergeSnapshots(a: PortfolioSnapshot[], b: PortfolioSnapshot[]): PortfolioSnapshot[] {
+  const map = new Map<string, PortfolioSnapshot>();
+  for (const s of [...a, ...b]) {
+    const ex = map.get(s.date);
+    if (!ex || (s.timestamp ?? 0) >= (ex.timestamp ?? 0)) map.set(s.date, s);
+  }
+  return [...map.values()].sort((x, y) => x.date.localeCompare(y.date));
+}
+
+// 按 id 合并（计划/日志），冲突时取 updatedAt 较大者（无 updatedAt 时以 b 为准）。
+function mergeById<T extends { id: string; updatedAt?: number }>(a: T[], b: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const x of a) map.set(x.id, x);
+  for (const x of b) {
+    const ex = map.get(x.id);
+    if (!ex || (x.updatedAt ?? 1) >= (ex.updatedAt ?? 0)) map.set(x.id, x);
+  }
+  return [...map.values()];
+}
+
+type DailyReturn = { date: string; return: number };
+function mergeDailyReturns(a: DailyReturn[], b: DailyReturn[]): DailyReturn[] {
+  const map = new Map<string, DailyReturn>();
+  for (const d of a) map.set(d.date, d);
+  for (const d of b) map.set(d.date, d); // 本地优先
+  return [...map.values()].sort((x, y) => x.date.localeCompare(y.date));
+}
+
+interface SyncDoc {
+  tradeRecords: TradeRecord[];
+  tradePlans: TradePlan[];
+  journalEntries: JournalEntry[];
+  snapshots: PortfolioSnapshot[];
+  dailyReturns: DailyReturn[];
+  deletedTradeUids: DeletedTradeRef[];
+  baseCash: number;
+  baseCashUpdatedAt: number;
+  holdings: StockHolding[];
+  optionHoldings: OptionHolding[];
+  updatedAt?: number;
+}
 
 interface AppState {
   holdings: StockHolding[];
@@ -25,6 +122,8 @@ interface AppState {
 
   snapshots: PortfolioSnapshot[];
   dailyReturns: { date: string; return: number }[];
+  deletedTradeUids: DeletedTradeRef[];
+  baseCashUpdatedAt: number;
   activeSnapshotIndex: number | null;
 
   loaded: boolean;
@@ -33,8 +132,8 @@ interface AppState {
   initialize: () => Promise<void>;
 
   addTradeRecord: (record: TradeRecord) => void;
-  removeTradeRecord: (tradeTime: number, id: string) => void;
-  updateTradeRecord: (oldTradeTime: number, oldId: string, record: TradeRecord) => void;
+  removeTradeRecord: (uid: string) => void;
+  updateTradeRecord: (uid: string, record: TradeRecord) => void;
 
   updatePrices: (updates: { id: string; nowPrice: number }[]) => void;
   updateOptionPremiums: (updates: { id: string; nowPremium: number }[]) => void;
@@ -72,10 +171,16 @@ function calcTradeCashAdjustment(records: TradeRecord[]): number {
   return adj;
 }
 
+function sortChronologically(records: TradeRecord[]): TradeRecord[] {
+  return [...records].sort(
+    (a, b) => a.tradeTime - b.tradeTime || (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+  );
+}
+
 function recalcHoldings(
   records: TradeRecord[]
 ): StockHolding[] {
-  const stockRecords = records.filter((r) => !r.assetType || r.assetType === "STOCK");
+  const stockRecords = sortChronologically(records.filter((r) => !r.assetType || r.assetType === "STOCK"));
   const stockMap = new Map<
     string,
     { name: string; totalNumber: number; totalCost: number }
@@ -133,7 +238,7 @@ function recalcHoldings(
 }
 
 function recalcOptionHoldings(records: TradeRecord[]): OptionHolding[] {
-  const optionRecords = records.filter((r) => r.assetType === "OPTION");
+  const optionRecords = sortChronologically(records.filter((r) => r.assetType === "OPTION"));
   const optionMap = new Map<string, {
     name: string;
     underlyingSymbol: string;
@@ -218,6 +323,40 @@ function calcRevenue(holdings: StockHolding[]): StockHolding[] {
       h.cost > 0 ? parseFloat(((revenue / h.cost) * 100).toFixed(2)) : 0;
     return { ...h, total, revenue, revenuePercentage };
   });
+}
+
+// 从交易记录派生当前持仓（含成本/数量），并恢复 nowPrice/nowPremium：
+// 优先取最新快照的收盘价，其次沿用内存中已有的现价，确保「持仓 ⇄ 交易记录」始终一致。
+function deriveHoldings(
+  tradeRecords: TradeRecord[],
+  snapshots: PortfolioSnapshot[],
+  prevHoldings: StockHolding[] = [],
+  prevOptionHoldings: OptionHolding[] = []
+): { holdings: StockHolding[]; optionHoldings: OptionHolding[] } {
+  const rawHoldings = recalcHoldings(tradeRecords);
+  const rawOptions = recalcOptionHoldings(tradeRecords);
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const latest = sorted[sorted.length - 1];
+
+  for (const h of rawHoldings) {
+    const snapH = latest?.holdings.find((s) => s.id === h.id);
+    if (snapH && snapH.nowPrice > 0) {
+      h.nowPrice = snapH.nowPrice;
+    } else {
+      const prev = prevHoldings.find((o) => o.id === h.id);
+      if (prev && prev.nowPrice > 0) h.nowPrice = prev.nowPrice;
+    }
+  }
+  for (const o of rawOptions) {
+    const snapO = latest?.optionHoldings.find((s) => s.id === o.id);
+    if (snapO && snapO.nowPremium > 0) {
+      o.nowPremium = snapO.nowPremium;
+    } else {
+      const prev = prevOptionHoldings.find((p) => p.id === o.id);
+      if (prev && prev.nowPremium > 0) o.nowPremium = prev.nowPremium;
+    }
+  }
+  return { holdings: calcRevenue(rawHoldings), optionHoldings: calcOptionRevenue(rawOptions) };
 }
 
 function findSourceStock(
@@ -370,12 +509,14 @@ export const useStore = create<AppState>((set, get) => ({
   journalEntries: [],
   snapshots: [],
   dailyReturns: [],
+  deletedTradeUids: [],
+  baseCashUpdatedAt: 0,
   activeSnapshotIndex: null,
   loaded: false,
   isRefreshing: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings] = await Promise.all([
+    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
       getItem<JournalEntry[]>("journalEntries"),
@@ -384,6 +525,8 @@ export const useStore = create<AppState>((set, get) => ({
       getItem<number>("baseCash"),
       getItem<StockHolding[]>("holdings"),
       getItem<OptionHolding[]>("optionHoldings"),
+      getItem<DeletedTradeRef[]>("deletedTradeUids"),
+      getItem<number>("baseCashUpdatedAt"),
     ]);
 
     console.log("[initialize] raw data from IndexedDB:", {
@@ -394,7 +537,8 @@ export const useStore = create<AppState>((set, get) => ({
       storedOptionHoldings: storedOptionHoldings?.length ?? 0,
     });
 
-    const tradeRecords = records ?? [];
+    const deletedTradeUids = storedTombstones ?? [];
+    const tradeRecords = mergeTradeRecords(normalizeTradeRecords(records ?? []), [], deletedTradeUids);
     const tradePlans: TradePlan[] = (plans ?? []).map((p: any) => {
       const plan = { ...p };
       plan.updatedAt = plan.updatedAt ?? plan.createdAt;
@@ -422,8 +566,7 @@ export const useStore = create<AppState>((set, get) => ({
       .sort((a, b) => a.date.localeCompare(b.date));
     const baseCash = storedBaseCash ?? 10000;
 
-    const holdings = recalcHoldings(tradeRecords);
-    const optionHoldings = recalcOptionHoldings(tradeRecords);
+    const { holdings, optionHoldings } = deriveHoldings(tradeRecords, snapshots);
 
     console.log("[initialize] recalc result:", {
       stockHoldings: holdings.length,
@@ -434,64 +577,27 @@ export const useStore = create<AppState>((set, get) => ({
     const cashAdj = calcTradeCashAdjustment(tradeRecords);
     const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + cashAdj };
 
-    if (snapshots.length > 0) {
-      const latest = snapshots[snapshots.length - 1];
-      console.log("[initialize] restoring nowPrice from latest snapshot", { snapshotDate: latest.date, holdings: latest.holdings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price })) });
-      for (const h of holdings) {
-        const snap = latest.holdings.find((s) => s.id === h.id);
-        if (snap && snap.nowPrice > 0) {
-          h.nowPrice = snap.nowPrice;
-        }
-      }
-      console.log("[initialize] restoring nowPremium from latest snapshot", { snapshotDate: latest.date, options: latest.optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium })) });
-      for (const o of optionHoldings) {
-        const snap = latest.optionHoldings.find((s) => s.id === o.id);
-        if (snap && snap.nowPremium > 0) {
-          o.nowPremium = snap.nowPremium;
-        }
-      }
-    } else {
-      console.log("[initialize] no snapshots — nowPrice/nowPremium stays at 0 (no data)");
-    }
-
-    console.log("[initialize] final holdings before set:", holdings.map((h) => ({ id: h.id, name: h.name, number: h.number, price: h.price, nowPrice: h.nowPrice, cost: h.cost, total: h.price * h.number, totalWithNowPrice: h.nowPrice * h.number, revenue: (h.nowPrice * h.number) - h.cost })));
-    console.log("[initialize] final optionHoldings before set:", optionHoldings.map((o) => ({ id: o.id, nowPremium: o.nowPremium, totalCost: o.totalCost, currentValue: o.nowPremium * o.contracts * 100, revenue: (o.nowPremium * o.contracts * 100) - o.totalCost })));
-
     set({
       tradeRecords,
       tradePlans,
       journalEntries,
       snapshots,
       dailyReturns: storedDr ?? [],
+      deletedTradeUids,
+      baseCashUpdatedAt: storedBaseCashUpdatedAt ?? 0,
       baseCash,
-      holdings: calcRevenue(holdings),
-      optionHoldings: calcOptionRevenue(optionHoldings),
+      holdings,
+      optionHoldings,
       cash,
       loaded: true,
     });
   },
 
   addTradeRecord: (record) => {
-    const records = [...get().tradeRecords, record];
-    const cashAdj = calcTradeCashAdjustment(records);
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-
-    const oldHoldings = get().holdings;
-    const rawHoldings = recalcHoldings(records);
-    const restored = rawHoldings.map((h) => {
-      const old = oldHoldings.find((o) => o.id === h.id);
-      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
-    });
-    const holdings = calcRevenue(restored);
-    console.log("[addTradeRecord] nowPrice restored:", rawHoldings.map((h) => ({ id: h.id, price: h.price, nowPrice: (oldHoldings.find((o) => o.id === h.id)?.nowPrice ?? h.price) })));
-
-    const oldOptionHoldings = get().optionHoldings;
-    const rawOptions = recalcOptionHoldings(records);
-    const restoredOptions = rawOptions.map((o) => {
-      const old = oldOptionHoldings.find((p) => p.id === o.id);
-      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
-    });
-    const optionHoldings = calcOptionRevenue(restoredOptions);
+    const rec: TradeRecord = { ...record, uid: record.uid || newUid(), updatedAt: Date.now() };
+    const records = [...get().tradeRecords, rec];
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
     set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
@@ -500,63 +606,27 @@ export const useStore = create<AppState>((set, get) => ({
     get().syncToJsonBin();
   },
 
-  removeTradeRecord: (tradeTime, id) => {
-    const records = get().tradeRecords.filter(
-      (r) => !(r.tradeTime === tradeTime && r.id === id)
-    );
-    const cashAdj = calcTradeCashAdjustment(records);
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
+  removeTradeRecord: (uid) => {
+    const records = get().tradeRecords.filter((r) => r.uid !== uid);
+    const deletedTradeUids = mergeTombstones(get().deletedTradeUids, [{ uid, deletedAt: Date.now() }]);
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
-    const oldHoldings = get().holdings;
-    const rawHoldings = recalcHoldings(records);
-    const restored = rawHoldings.map((h) => {
-      const old = oldHoldings.find((o) => o.id === h.id);
-      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
-    });
-    const holdings = calcRevenue(restored);
-
-    const oldOptionHoldings = get().optionHoldings;
-    const rawOptions = recalcOptionHoldings(records);
-    const restoredOptions = rawOptions.map((o) => {
-      const old = oldOptionHoldings.find((p) => p.id === o.id);
-      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
-    });
-    const optionHoldings = calcOptionRevenue(restoredOptions);
-
-    set({
-      tradeRecords: records,
-      holdings,
-      optionHoldings,
-      cash,
-    });
+    set({ tradeRecords: records, deletedTradeUids, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
+    setItem("deletedTradeUids", deletedTradeUids);
     markPendingSync("tradeRecords", records);
+    markPendingSync("deletedTradeUids", deletedTradeUids);
     get().takeSnapshot();
     get().syncToJsonBin();
   },
 
-  updateTradeRecord: (oldTradeTime, oldId, record) => {
+  updateTradeRecord: (uid, record) => {
     const records = get().tradeRecords.map((r) =>
-      r.tradeTime === oldTradeTime && r.id === oldId ? record : r
+      r.uid === uid ? { ...record, uid, updatedAt: Date.now() } : r
     );
-    const cashAdj = calcTradeCashAdjustment(records);
-    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + cashAdj };
-
-    const oldHoldings = get().holdings;
-    const rawHoldings = recalcHoldings(records);
-    const restored = rawHoldings.map((h) => {
-      const old = oldHoldings.find((o) => o.id === h.id);
-      return old && old.nowPrice > 0 ? { ...h, nowPrice: old.nowPrice } : h;
-    });
-    const holdings = calcRevenue(restored);
-
-    const oldOptionHoldings = get().optionHoldings;
-    const rawOptions = recalcOptionHoldings(records);
-    const restoredOptions = rawOptions.map((o) => {
-      const old = oldOptionHoldings.find((p) => p.id === o.id);
-      return old && old.nowPremium > 0 ? { ...o, nowPremium: old.nowPremium } : o;
-    });
-    const optionHoldings = calcOptionRevenue(restoredOptions);
+    const cash = { id: "cash" as const, name: "现金" as const, total: get().baseCash + calcTradeCashAdjustment(records) };
+    const { holdings, optionHoldings } = deriveHoldings(records, get().snapshots, get().holdings, get().optionHoldings);
 
     set({ tradeRecords: records, holdings, optionHoldings, cash });
     setItem("tradeRecords", records);
@@ -656,9 +726,11 @@ export const useStore = create<AppState>((set, get) => ({
   updateCash: (total) => {
     const cashAdj = calcTradeCashAdjustment(get().tradeRecords);
     const baseCash = total - cashAdj;
+    const baseCashUpdatedAt = Date.now();
     const cash: CashReserve = { id: "cash", name: "现金", total };
-    set({ baseCash, cash });
+    set({ baseCash, baseCashUpdatedAt, cash });
     setItem("baseCash", baseCash);
+    setItem("baseCashUpdatedAt", baseCashUpdatedAt);
     markPendingSync("baseCash", baseCash);
     get().syncToJsonBin();
   },
@@ -923,22 +995,100 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncToJsonBin: async (keepalive = false) => {
-    const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash, holdings, optionHoldings } =
-      get();
-    const data = {
+    const s = get();
+
+    // 卸载场景：尽力直接写当前状态，不做读改写/状态回灌。
+    if (keepalive) {
+      const doc: SyncDoc = {
+        tradeRecords: s.tradeRecords,
+        tradePlans: s.tradePlans,
+        journalEntries: s.journalEntries,
+        snapshots: s.snapshots,
+        dailyReturns: s.dailyReturns,
+        deletedTradeUids: s.deletedTradeUids,
+        baseCash: s.baseCash,
+        baseCashUpdatedAt: s.baseCashUpdatedAt,
+        holdings: s.holdings,
+        optionHoldings: s.optionHoldings,
+        updatedAt: Date.now(),
+      };
+      await writeData(doc, true);
+      return;
+    }
+
+    // 读-改-写：先取远端，按 uid / 日期合并，避免过期端覆盖其它设备的改动。
+    let remote: SyncDoc | null = null;
+    try {
+      remote = await readData<SyncDoc>();
+    } catch {
+      remote = null;
+    }
+
+    const tombstones = remote
+      ? mergeTombstones(remote.deletedTradeUids ?? [], s.deletedTradeUids)
+      : s.deletedTradeUids;
+    const tradeRecords = remote
+      ? mergeTradeRecords(normalizeTradeRecords(remote.tradeRecords ?? []), s.tradeRecords, tombstones)
+      : s.tradeRecords;
+    const snapshots = remote ? mergeSnapshots(remote.snapshots ?? [], s.snapshots) : s.snapshots;
+    const tradePlans = remote ? mergeById(remote.tradePlans ?? [], s.tradePlans) : s.tradePlans;
+    const journalEntries = remote ? mergeById(remote.journalEntries ?? [], s.journalEntries) : s.journalEntries;
+    const dailyReturns = remote ? mergeDailyReturns(remote.dailyReturns ?? [], s.dailyReturns) : s.dailyReturns;
+    const remoteBaseAt = remote?.baseCashUpdatedAt ?? 0;
+    const baseCash = remoteBaseAt > s.baseCashUpdatedAt ? (remote!.baseCash ?? s.baseCash) : s.baseCash;
+    const baseCashUpdatedAt = Math.max(remoteBaseAt, s.baseCashUpdatedAt);
+
+    const { holdings, optionHoldings } = deriveHoldings(tradeRecords, snapshots, s.holdings, s.optionHoldings);
+    const cash: CashReserve = {
+      id: "cash",
+      name: "现金",
+      total: baseCash + calcTradeCashAdjustment(tradeRecords),
+    };
+
+    const doc: SyncDoc = {
       tradeRecords,
       tradePlans,
       journalEntries,
       snapshots,
       dailyReturns,
+      deletedTradeUids: tombstones,
       baseCash,
+      baseCashUpdatedAt,
       holdings,
       optionHoldings,
+      updatedAt: Date.now(),
     };
-    const ok = await writeData(data, keepalive);
-    if (ok && !keepalive) {
-      await clearAllPendingSyncs();
+
+    // 带退避重试的写入，避免单次网络抖动导致改动丢失。
+    let ok = false;
+    for (let i = 0; i < 4; i++) {
+      ok = await writeData(doc, false);
+      if (ok) break;
+      await new Promise((r) => setTimeout(r, 500 * 2 ** i));
     }
-    return;
+    if (ok) await clearAllPendingSyncs();
+
+    // 回灌合并结果，保证本设备与云端一致。
+    set({
+      tradeRecords,
+      tradePlans,
+      journalEntries,
+      snapshots,
+      dailyReturns,
+      deletedTradeUids: tombstones,
+      baseCash,
+      baseCashUpdatedAt,
+      holdings,
+      optionHoldings,
+      cash,
+    });
+    setItem("tradeRecords", tradeRecords);
+    setItem("tradePlans", tradePlans);
+    setItem("journalEntries", journalEntries);
+    setItem("snapshots", snapshots);
+    setItem("dailyReturns", dailyReturns);
+    setItem("deletedTradeUids", tombstones);
+    setItem("baseCash", baseCash);
+    setItem("baseCashUpdatedAt", baseCashUpdatedAt);
   },
 }));

@@ -90,6 +90,17 @@ export async function clearAllData(): Promise<void> {
   });
 }
 
+export async function hasPendingSyncs(): Promise<boolean> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("pendingSync", "readonly");
+    const store = tx.objectStore("pendingSync");
+    const request = store.count();
+    request.onsuccess = () => resolve(request.result > 0);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function clearAllPendingSyncs(): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {

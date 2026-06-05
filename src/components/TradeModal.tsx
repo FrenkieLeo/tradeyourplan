@@ -35,7 +35,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
   const [optionPremium, setOptionPremium] = useState("");
 
   const [editingTime, setEditingTime] = useState<number | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingUid, setEditingUid] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 15;
@@ -63,7 +63,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       setOptionContracts("");
       setOptionPremium("");
       setEditingTime(null);
-      setEditingId(null);
+      setEditingUid(null);
       setErrorMsg(null);
       setPage(1);
     }
@@ -95,6 +95,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
 
     const code = stockId.toUpperCase();
     const record: TradeRecord = {
+      uid: editingUid ?? "",
       id: code,
       assetType: "STOCK",
       name: stockName,
@@ -104,8 +105,8 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       tradeTime: time,
     };
 
-    if (editingTime !== null && editingId !== null) {
-      updateTradeRecord(editingTime, editingId, record);
+    if (editingUid !== null) {
+      updateTradeRecord(editingUid, record);
     } else {
       addTradeRecord(record);
     }
@@ -116,7 +117,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
     setPrice("");
     setTradeTime("");
     setEditingTime(null);
-    setEditingId(null);
+    setEditingUid(null);
   };
 
   const handleSubmitOption = async () => {
@@ -136,6 +137,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
 
     const code = optionId.toUpperCase();
     const record: TradeRecord = {
+      uid: editingUid ?? "",
       id: code,
       assetType: "OPTION",
       name: optionName,
@@ -149,8 +151,8 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       optionExpiration: optionExpiration,
     };
 
-    if (editingTime !== null && editingId !== null) {
-      updateTradeRecord(editingTime, editingId, record);
+    if (editingUid !== null) {
+      updateTradeRecord(editingUid, record);
     } else {
       addTradeRecord(record);
     }
@@ -164,7 +166,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
     setOptionContracts("");
     setOptionPremium("");
     setEditingTime(null);
-    setEditingId(null);
+    setEditingUid(null);
   };
 
   const formatTradeTime = (t: number) => {
@@ -196,7 +198,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
       setTradeTime(formatTradeTime(r.tradeTime));
     }
     setEditingTime(r.tradeTime);
-    setEditingId(r.id);
+    setEditingUid(r.uid);
   };
 
   const formatTime = (t: number) => {
@@ -246,7 +248,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
         {/* Tab 切换 */}
         <div className="mb-6 flex gap-1 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-1">
           <button
-            onClick={() => { setTab("STOCK"); setEditingTime(null); setEditingId(null); setErrorMsg(null); }}
+            onClick={() => { setTab("STOCK"); setEditingTime(null); setEditingUid(null); setErrorMsg(null); }}
             className={`flex-1 rounded px-4 py-2 text-sm font-medium transition-colors ${
               tab === "STOCK"
                 ? "bg-[var(--tv-accent)] text-white"
@@ -256,7 +258,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
             股票交易
           </button>
           <button
-            onClick={() => { setTab("OPTION"); setEditingTime(null); setEditingId(null); setErrorMsg(null); }}
+            onClick={() => { setTab("OPTION"); setEditingTime(null); setEditingUid(null); setErrorMsg(null); }}
             className={`flex-1 rounded px-4 py-2 text-sm font-medium transition-colors ${
               tab === "OPTION"
                 ? "bg-[var(--tv-accent)] text-white"
@@ -522,7 +524,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
             </thead>
             <tbody>
               {paginatedRecords.map((r) => (
-                <tr key={`${r.tradeTime}-${r.id}`} className="text-sm">
+                <tr key={r.uid} className="text-sm">
                   <td className="py-3">{r.name}</td>
                   <td className="py-3 text-right text-[var(--tv-text-secondary)]">{r.id}</td>
                   <td className="py-3 text-right">
@@ -543,7 +545,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
                   <td className="py-3">
                     <div className="flex gap-2">
                       <button onClick={() => startEdit(r)} className="text-xs text-[var(--tv-accent)] hover:underline">编辑</button>
-                      <button onClick={() => removeTradeRecord(r.tradeTime, r.id)} className="text-xs text-[var(--tv-red)] hover:underline">删除</button>
+                      <button onClick={() => removeTradeRecord(r.uid)} className="text-xs text-[var(--tv-red)] hover:underline">删除</button>
                     </div>
                   </td>
                 </tr>
