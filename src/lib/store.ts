@@ -892,13 +892,14 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncToJsonBin: async (keepalive = false) => {
-    const { tradeRecords, tradePlans, journalEntries, snapshots, baseCash, holdings, optionHoldings } =
+    const { tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, baseCash, holdings, optionHoldings } =
       get();
     const data = {
       tradeRecords,
       tradePlans,
       journalEntries,
       snapshots,
+      dailyReturns,
       baseCash,
       holdings,
       optionHoldings,
