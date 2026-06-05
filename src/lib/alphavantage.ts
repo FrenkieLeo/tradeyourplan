@@ -1,9 +1,4 @@
-const BASE_URL = "https://www.alphavantage.co/query";
-const API_KEY = "RJFNH4AQQR0KXNKT";
-
-function getApiKey(): string {
-  return API_KEY;
-}
+// 行情通过同源服务端路由 /api/av 代理，密钥由服务端持有（见 src/app/api/av/route.ts）。
 
 interface AlphaVantageQuote {
   "Global Quote": {
@@ -45,12 +40,10 @@ export interface WeeklyKline {
 }
 
 export async function fetchQuote(symbol: string): Promise<StockQuote | null> {
-  const key = getApiKey();
-  if (!key) return null;
-
   try {
     const res = await fetch(
-      `${BASE_URL}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${key}`
+      `/api/av?fn=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}`,
+      { cache: "no-store" }
     );
     if (!res.ok) return null;
     const data: AlphaVantageQuote = await res.json();
@@ -72,12 +65,10 @@ export async function fetchQuote(symbol: string): Promise<StockQuote | null> {
 export async function fetchWeeklyKlines(
   symbol: string
 ): Promise<WeeklyKline[]> {
-  const key = getApiKey();
-  if (!key) return [];
-
   try {
     const res = await fetch(
-      `${BASE_URL}?function=TIME_SERIES_WEEKLY&symbol=${symbol}&apikey=${key}`
+      `/api/av?fn=TIME_SERIES_WEEKLY&symbol=${encodeURIComponent(symbol)}`,
+      { cache: "no-store" }
     );
     if (!res.ok) return [];
     const data: AlphaVantageTimeSeries = await res.json();
