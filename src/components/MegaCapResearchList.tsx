@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import type { MegaCapResearch } from "@/types";
 
@@ -217,51 +218,53 @@ export default function MegaCapResearchList() {
         </table>
       </div>
 
-      {editingItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={closeModal}
-        >
+      {editingItem &&
+        createPortal(
           <div
-            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] p-6 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={closeModal}
           >
-            <div className="mb-5 flex items-center justify-between">
-              <h3 className="text-base font-semibold">编辑研究记录</h3>
-              <button
-                onClick={closeModal}
-                className="text-xl leading-none text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]"
-              >
-                &times;
-              </button>
-            </div>
+            <div
+              className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] p-6 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-5 flex items-center justify-between">
+                <h3 className="text-base font-semibold text-[var(--tv-text)]">编辑研究记录</h3>
+                <button
+                  onClick={closeModal}
+                  className="text-xl leading-none text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]"
+                >
+                  &times;
+                </button>
+              </div>
 
-            <p className="mb-4 text-xs text-[var(--tv-text-secondary)]">修改内容将自动保存，无需点击确认</p>
+              <p className="mb-4 text-xs text-[var(--tv-text-secondary)]">修改内容将自动保存，无需点击确认</p>
 
-            <div className="space-y-4">
-              {FIELDS.map((field) => (
-                <div key={field.key}>
-                  <label className="mb-1 block text-xs text-[var(--tv-text-secondary)]">{field.label}</label>
-                  {field.multiline ? (
-                    <textarea
-                      value={String(editingItem[field.key] ?? "")}
-                      onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                      className="min-h-[80px] w-full rounded px-3 py-2 text-sm"
-                      rows={3}
-                    />
-                  ) : (
-                    <input
-                      value={String(editingItem[field.key] ?? "")}
-                      onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                      className={`w-full rounded px-3 py-2 text-sm ${field.key === "stockCode" ? "uppercase" : ""}`}
-                    />
-                  )}
-                </div>
-              ))}
+              <div className="space-y-4">
+                {FIELDS.map((field) => (
+                  <div key={field.key}>
+                    <label className="mb-1 block text-xs text-[var(--tv-text-secondary)]">{field.label}</label>
+                    {field.multiline ? (
+                      <textarea
+                        value={String(editingItem[field.key] ?? "")}
+                        onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                        className="min-h-[80px] w-full rounded border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-2 text-sm text-[var(--tv-text)]"
+                        rows={3}
+                      />
+                    ) : (
+                      <input
+                        value={String(editingItem[field.key] ?? "")}
+                        onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                        className={`w-full rounded border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-2 text-sm text-[var(--tv-text)] ${field.key === "stockCode" ? "uppercase" : ""}`}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
