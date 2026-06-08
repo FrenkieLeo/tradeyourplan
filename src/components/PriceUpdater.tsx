@@ -20,6 +20,7 @@ import type {
   OptionHolding,
   TradeRecord,
   TradePlan,
+  MegaCapResearch,
   JournalEntry,
   PortfolioSnapshot,
   DailyPricePoint,
@@ -43,6 +44,7 @@ export default function PriceUpdater() {
         const remote = await readData<{
           tradeRecords?: TradeRecord[];
           tradePlans?: TradePlan[];
+          megaCapResearches?: MegaCapResearch[];
           journalEntries?: JournalEntry[];
           snapshots?: PortfolioSnapshot[];
           dailyReturns?: DailyPricePoint[];
@@ -50,6 +52,7 @@ export default function PriceUpdater() {
           deletedTradeUids?: DeletedTradeRef[];
           deletedSnapshotDates?: DeletedTradeRef[];
           deletedPlanIds?: DeletedTradeRef[];
+          deletedMegaCapResearchIds?: DeletedTradeRef[];
           deletedCashTxUids?: DeletedTradeRef[];
           holdings?: StockHolding[];
           optionHoldings?: OptionHolding[];
@@ -74,7 +77,7 @@ export default function PriceUpdater() {
             date < todayET || (date === todayET && marketClosed);
 
           // 读取本地（可能含未同步成功的改动），与远程按 uid / 日期 / 墓碑合并，避免丢失本地改动。
-          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localJournals, localCashTxs, localCashTxTombs] = await Promise.all([
+          const [localRecords, localTombs, localSnaps, localDr, localSnapTombs, localPlanTombs, localPlans, localResearchTombs, localResearches, localJournals, localCashTxs, localCashTxTombs] = await Promise.all([
             getItem<TradeRecord[]>("tradeRecords"),
             getItem<DeletedTradeRef[]>("deletedTradeUids"),
             getItem<PortfolioSnapshot[]>("snapshots"),
@@ -82,6 +85,8 @@ export default function PriceUpdater() {
             getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
             getItem<DeletedTradeRef[]>("deletedPlanIds"),
             getItem<TradePlan[]>("tradePlans"),
+            getItem<DeletedTradeRef[]>("deletedMegaCapResearchIds"),
+            getItem<MegaCapResearch[]>("megaCapResearches"),
             getItem<JournalEntry[]>("journalEntries"),
             getItem<CashTransaction[]>("cashTransactions"),
             getItem<DeletedTradeRef[]>("deletedCashTxUids"),
@@ -90,6 +95,7 @@ export default function PriceUpdater() {
           const tombstones = mergeTombstones(remote.deletedTradeUids ?? [], localTombs ?? []);
           const snapTombs = mergeTombstones(remote.deletedSnapshotDates ?? [], localSnapTombs ?? []);
           const planTombs = mergeTombstones(remote.deletedPlanIds ?? [], localPlanTombs ?? []);
+          const researchTombs = mergeTombstones(remote.deletedMegaCapResearchIds ?? [], localResearchTombs ?? []);
           const cashTxTombs = mergeTombstones(remote.deletedCashTxUids ?? [], localCashTxTombs ?? []);
           const mergedCashTxs = mergeUidList(remote.cashTransactions ?? [], localCashTxs ?? [], cashTxTombs);
           const mergedRecords = mergeTradeRecords(
@@ -112,6 +118,12 @@ export default function PriceUpdater() {
             (x) => x.updatedAt ?? 0,
             planTombs
           );
+          const mergedResearches = applyTombstones(
+            mergeById(remote.megaCapResearches ?? [], localResearches ?? []),
+            (x) => x.id,
+            (x) => x.updatedAt ?? 0,
+            researchTombs
+          );
           const mergedJournals = mergeJournalEntries(remote.journalEntries ?? [], localJournals ?? []);
           const drMap = new Map<string, DailyPricePoint>();
           for (const d of (remote.dailyReturns ?? []).filter((d) => isFinalized(d.date))) drMap.set(d.date, d);
@@ -122,10 +134,12 @@ export default function PriceUpdater() {
           await setItem("deletedTradeUids", tombstones);
           await setItem("deletedSnapshotDates", snapTombs);
           await setItem("deletedPlanIds", planTombs);
+          await setItem("deletedMegaCapResearchIds", researchTombs);
           await setItem("deletedCashTxUids", cashTxTombs);
           await setItem("snapshots", mergedSnapshots);
           await setItem("dailyReturns", mergedDr);
           await setItem("tradePlans", mergedPlans);
+          await setItem("megaCapResearches", mergedResearches);
           await setItem("journalEntries", mergedJournals);
           await setItem("cashTransactions", mergedCashTxs);
           if (remote.baseCash != null) await setItem("baseCash", remote.baseCash);
