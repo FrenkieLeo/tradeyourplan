@@ -124,4 +124,18 @@ export interface MegaCapResearch {
   updatedAt: number;
 }
 
+export interface FundamentalEntry {
+  id: string;
+  stockCode: string;
+  fiscalYearEndMonth: number;
+  peLow: number;
+  peHigh: number;
+  peMedian: number;
+  currentFYEps: number;
+  nextFYEps: number;
+  supportRange: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 

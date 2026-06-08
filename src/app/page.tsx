@@ -12,12 +12,18 @@ import DataBackup from "@/components/DataBackup";
 import AllocationChart from "@/components/AllocationChart";
 import BenchmarkChart from "@/components/BenchmarkChart";
 import MegaCapResearchList from "@/components/MegaCapResearchList";
+import FundamentalList from "@/components/FundamentalList";
 
-type Viewport = "portfolio" | "research";
+type Viewport = "fundamental" | "portfolio" | "research";
 
 export default function Home() {
   const { holdings, optionHoldings, loaded, isRefreshing } = useStore();
   const [viewport, setViewport] = useState<Viewport>("portfolio");
+
+  const translateX =
+    viewport === "fundamental" ? "translateX(0)"
+    : viewport === "portfolio" ? "translateX(-33.333%)"
+    : "translateX(-66.666%)";
 
   return (
     <div className="min-h-screen overflow-hidden bg-[var(--tv-bg)]">
@@ -47,12 +53,26 @@ export default function Home() {
           <div
             className="flex transition-transform duration-500 ease-in-out"
             style={{
-              width: "200%",
-              transform: viewport === "portfolio" ? "translateX(0)" : "translateX(-50%)",
+              width: "300%",
+              transform: translateX,
             }}
           >
+            {/* 基本面跟踪视窗 */}
+            <div className="w-1/3 shrink-0">
+              <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
+                <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+                  <h1 className="text-lg font-bold text-[var(--tv-text)]">基本面跟踪清单</h1>
+                  <DataBackup />
+                </div>
+              </header>
+
+              <main className="mx-auto max-w-6xl px-4 py-6">
+                <FundamentalList />
+              </main>
+            </div>
+
             {/* 投资组合视窗 */}
-            <div className="w-1/2 shrink-0">
+            <div className="w-1/3 shrink-0">
               <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
                 <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
                   <h1 className="text-lg font-bold text-[var(--tv-text)]">TradeYourPlan</h1>
@@ -93,7 +113,7 @@ export default function Home() {
             </div>
 
             {/* 研究清单视窗 */}
-            <div className="w-1/2 shrink-0">
+            <div className="w-1/3 shrink-0">
               <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
                 <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
                   <h1 className="text-lg font-bold text-[var(--tv-text)]">千亿市值公司研究清单</h1>
@@ -107,28 +127,35 @@ export default function Home() {
             </div>
           </div>
 
-          {/* 视窗切换按钮 */}
-          {viewport === "portfolio" ? (
+          {/* 视窗切换按钮 — 左侧 */}
+          {viewport !== "fundamental" && (
             <button
-              onClick={() => setViewport("research")}
-              className="fixed right-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-l-lg border border-r-0 border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-4 text-sm text-[var(--tv-text)] shadow-lg transition-colors hover:border-[var(--tv-accent)] hover:text-[var(--tv-accent)]"
-              title="前往研究清单"
-            >
-              <span className="text-xs [writing-mode:vertical-rl]">研究清单</span>
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M9 18l6-6-6-6" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              onClick={() => setViewport("portfolio")}
+              onClick={() => setViewport(viewport === "portfolio" ? "fundamental" : "portfolio")}
               className="fixed left-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-r-lg border border-l-0 border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-4 text-sm text-[var(--tv-text)] shadow-lg transition-colors hover:border-[var(--tv-accent)] hover:text-[var(--tv-accent)]"
-              title="返回投资组合"
+              title={viewport === "portfolio" ? "前往基本面跟踪" : "返回投资组合"}
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M15 18l-6-6 6-6" />
               </svg>
-              <span className="text-xs [writing-mode:vertical-rl]">投资组合</span>
+              <span className="text-xs [writing-mode:vertical-rl]">
+                {viewport === "portfolio" ? "基本面" : "投资组合"}
+              </span>
+            </button>
+          )}
+
+          {/* 视窗切换按钮 — 右侧 */}
+          {viewport !== "research" && (
+            <button
+              onClick={() => setViewport(viewport === "portfolio" ? "research" : "portfolio")}
+              className="fixed right-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-l-lg border border-r-0 border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-4 text-sm text-[var(--tv-text)] shadow-lg transition-colors hover:border-[var(--tv-accent)] hover:text-[var(--tv-accent)]"
+              title={viewport === "portfolio" ? "前往研究清单" : "返回投资组合"}
+            >
+              <span className="text-xs [writing-mode:vertical-rl]">
+                {viewport === "portfolio" ? "研究清单" : "投资组合"}
+              </span>
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
             </button>
           )}
         </>
