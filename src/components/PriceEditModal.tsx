@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 
 interface PriceEditModalProps {
@@ -150,7 +151,7 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
 
   const hasEdits = pending.size > 0;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
         className="mx-4 flex max-h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] shadow-xl"
@@ -297,6 +298,7 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import type { CashTxType } from "@/types";
 
@@ -66,7 +67,7 @@ export default function CashModal({ open, onClose }: CashModalProps) {
 
   const sorted = [...cashTransactions].sort((a, b) => b.date.localeCompare(a.date));
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
         className="mx-4 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] shadow-2xl"
@@ -189,6 +190,7 @@ export default function CashModal({ open, onClose }: CashModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import type { TradeRecord, StockHolding, OptionHolding } from "@/types";
 
@@ -212,7 +213,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
   const totalValue = holdings.reduce((s, h) => s + h.total, 0) + optionHoldings.reduce((s, o) => s + o.currentValue, 0);
   const totalRevenue = holdings.reduce((s, h) => s + h.revenue, 0) + optionHoldings.reduce((s, o) => s + o.revenue, 0);
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
         className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] p-6 shadow-2xl"
@@ -583,6 +584,7 @@ export default function TradeModal({ open, onClose }: TradeModalProps) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
