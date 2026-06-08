@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 
@@ -20,10 +20,10 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
   const [pending, setPending] = useState<Map<string, Map<string, string>>>(new Map());
   const [newDates, setNewDates] = useState<string[]>([]);
   const [addDateInput, setAddDateInput] = useState("");
-  const [saving, setSaving] = useState(false);
   const [filterStart, setFilterStart] = useState("");
   const [filterEnd, setFilterEnd] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const columns = useMemo(() => {
     const seen = new Set<string>();
@@ -63,10 +63,13 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
       setPending(new Map());
       setNewDates([]);
       setAddDateInput("");
-      setSaving(false);
       setConfirmDelete(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, []);
 
   function getOriginal(date: string, col: Column): number | null {
     const snap = snapshots.find((s) => s.date === date);
@@ -86,6 +89,25 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
     return orig !== null ? String(orig) : "";
   }
 
+  const flushPending = useCallback((pendingMap: Map<string, Map<string, string>>) => {
+    const updates: { date: string; id: string; value: number; type: "stock" | "option" }[] = [];
+    for (const [date, byDate] of pendingMap) {
+      for (const [id, raw] of byDate) {
+        const val = parseFloat(raw);
+        if (isNaN(val) || val <= 0) continue;
+        const col = columns.find((c) => c.id === id);
+        if (!col) continue;
+        const orig = getOriginal(date, col);
+        if (orig === val) continue;
+        updates.push({ date, id, value: val, type: col.type });
+      }
+    }
+    if (updates.length > 0) {
+      updateHistoricalPrices(updates);
+      syncToJsonBin();
+    }
+  }, [columns, snapshots, updateHistoricalPrices, syncToJsonBin]);
+
   function setCellValue(date: string, col: Column, raw: string) {
     setPending((prev) => {
       const next = new Map(prev);
@@ -96,6 +118,13 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
         byDate.set(col.id, raw);
       }
       if (byDate.size === 0) next.delete(date); else next.set(date, byDate);
+
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        flushPending(next);
+        setPending(new Map());
+      }, 800);
+
       return next;
     });
   }
@@ -123,43 +152,29 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
     }
   }
 
-  async function handleSave() {
-    setSaving(true);
-    const updates: { date: string; id: string; value: number; type: "stock" | "option" }[] = [];
-
-    for (const [date, byDate] of pending) {
-      for (const [id, raw] of byDate) {
-        const val = parseFloat(raw);
-        if (isNaN(val) || val <= 0) continue;
-        const col = columns.find((c) => c.id === id);
-        if (!col) continue;
-        const orig = getOriginal(date, col);
-        if (orig === val) continue;
-        updates.push({ date, id, value: val, type: col.type });
-      }
+  const handleClose = () => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    if (pending.size > 0) {
+      flushPending(pending);
+      setPending(new Map());
     }
-
-    if (updates.length > 0) {
-      updateHistoricalPrices(updates);
-      syncToJsonBin();
-    }
-    setSaving(false);
     onClose();
-  }
+  };
 
   if (!open) return null;
 
-  const hasEdits = pending.size > 0;
-
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={handleClose}>
       <div
         className="mx-4 flex max-h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--tv-border)] px-6 py-4">
-          <h3 className="text-base font-semibold text-[var(--tv-text)]">更新历史收盘价</h3>
-          <button onClick={onClose} className="text-sm text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">✕</button>
+          <div>
+            <h3 className="text-base font-semibold text-[var(--tv-text)]">更新历史收盘价</h3>
+            <p className="mt-1 text-xs text-[var(--tv-text-secondary)]">修改内容将自动保存，无需点击确认</p>
+          </div>
+          <button onClick={handleClose} className="text-sm text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">✕</button>
         </div>
 
         {/* 添加日期 */}
@@ -282,20 +297,6 @@ export default function PriceEditModal({ open, onClose }: PriceEditModalProps) {
               </table>
             </div>
           )}
-        </div>
-
-        {/* 底部按钮 */}
-        <div className="flex justify-end gap-3 border-t border-[var(--tv-border)] px-6 py-4">
-          <button onClick={onClose} disabled={saving} className="rounded px-4 py-2 text-sm text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">
-            取消
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || !hasEdits}
-            className="rounded bg-[#2962ff] px-6 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-          >
-            {saving ? "保存中..." : "保存"}
-          </button>
         </div>
       </div>
     </div>,

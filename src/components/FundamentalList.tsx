@@ -6,6 +6,27 @@ import { fetchQuote } from "@/lib/alphavantage";
 import type { FundamentalEntry } from "@/types";
 import FundamentalModal from "./FundamentalModal";
 
+function newId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function emptyEntry(id: string, stockCode: string): FundamentalEntry {
+  const now = Date.now();
+  return {
+    id,
+    stockCode,
+    fiscalYearEndMonth: 12,
+    peLow: 0,
+    peHigh: 0,
+    peMedian: 0,
+    currentFYEps: 0,
+    nextFYEps: 0,
+    supportRange: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function getFiscalYearLabels(fiscalMonth: number) {
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -29,10 +50,8 @@ interface StockGroup {
 }
 
 export default function FundamentalList() {
-  const { fundamentalEntries, holdings } = useStore();
-  const [modalOpen, setModalOpen] = useState(false);
+  const { fundamentalEntries, holdings, addFundamentalEntry } = useStore();
   const [editingEntry, setEditingEntry] = useState<FundamentalEntry | null>(null);
-  const [addStockCode, setAddStockCode] = useState<string | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
   const [fetchingPrices, setFetchingPrices] = useState<Set<string>>(new Set());
 
@@ -87,16 +106,15 @@ export default function FundamentalList() {
 
   const getPrice = (code: string) => holdingPriceMap[code] ?? marketPrices[code] ?? 0;
 
-  const openNew = (stockCode: string | null) => {
-    setEditingEntry(null);
-    setAddStockCode(stockCode);
-    setModalOpen(true);
+  const openNew = (stockCode: string) => {
+    const id = newId();
+    const item = emptyEntry(id, stockCode);
+    addFundamentalEntry(item);
+    setEditingEntry(item);
   };
 
   const openEdit = (entry: FundamentalEntry) => {
     setEditingEntry(entry);
-    setAddStockCode(null);
-    setModalOpen(true);
   };
 
   return (
@@ -104,7 +122,7 @@ export default function FundamentalList() {
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-base font-semibold">基本面跟踪清单</h2>
         <button
-          onClick={() => openNew(null)}
+          onClick={() => openNew("")}
           className="rounded bg-[var(--tv-accent)] px-4 py-1.5 text-sm font-medium text-white hover:opacity-80"
         >
           + 新增
@@ -150,7 +168,6 @@ export default function FundamentalList() {
                 const nextValHigh = entry.peHigh * entry.nextFYEps;
                 const nextMedianPrice = entry.peMedian * entry.nextFYEps;
                 const isFirst = ei === 0;
-                const isLast = ei === group.entries.length - 1;
 
                 return (
                   <tr
@@ -214,10 +231,9 @@ export default function FundamentalList() {
       </div>
 
       <FundamentalModal
-        open={modalOpen}
-        onClose={() => { setModalOpen(false); setEditingEntry(null); setAddStockCode(null); }}
-        stockCode={addStockCode}
-        editingEntry={editingEntry}
+        open={!!editingEntry}
+        onClose={() => setEditingEntry(null)}
+        entry={editingEntry}
       />
     </div>
   );

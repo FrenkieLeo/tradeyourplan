@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import type { CashTxType } from "@/types";
@@ -26,13 +26,12 @@ function todayET(): string {
 export default function CashModal({ open, onClose }: CashModalProps) {
   const { cash, updateCash, cashTransactions, addCashTransaction, removeCashTransaction } = useStore();
   const [amount, setAmount] = useState("");
-
-  // 新增流水表单
   const [txType, setTxType] = useState<CashTxType>("DEPOSIT");
   const [txAmount, setTxAmount] = useState("");
   const [txDate, setTxDate] = useState("");
   const [txNote, setTxNote] = useState("");
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -42,14 +41,27 @@ export default function CashModal({ open, onClose }: CashModalProps) {
     }
   }, [open, cash.total]);
 
-  if (!open) return null;
+  useEffect(() => {
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, []);
 
-  const handleSaveTotal = () => {
+  const flushCashTotal = useCallback(() => {
     const num = parseFloat(amount);
-    if (isNaN(num)) return;
-    updateCash(num);
-    onClose();
+    if (!isNaN(num) && num !== cash.total) {
+      updateCash(num);
+    }
+  }, [amount, cash.total, updateCash]);
+
+  const handleAmountChange = (val: string) => {
+    setAmount(val);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const num = parseFloat(val);
+      if (!isNaN(num)) updateCash(num);
+    }, 800);
   };
+
+  if (!open) return null;
 
   const handleAddTx = () => {
     const num = parseFloat(txAmount);
@@ -65,39 +77,40 @@ export default function CashModal({ open, onClose }: CashModalProps) {
     setTxNote("");
   };
 
+  const handleClose = () => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    flushCashTotal();
+    onClose();
+  };
+
   const sorted = [...cashTransactions].sort((a, b) => b.date.localeCompare(a.date));
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={handleClose}>
       <div
         className="mx-4 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--tv-border)] px-6 py-4">
-          <h2 className="text-base font-semibold">现金与流水</h2>
-          <button onClick={onClose} className="text-xl leading-none text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">&times;</button>
+          <div>
+            <h2 className="text-base font-semibold">现金与流水</h2>
+            <p className="mt-1 text-xs text-[var(--tv-text-secondary)]">现金修改将自动保存</p>
+          </div>
+          <button onClick={handleClose} className="text-xl leading-none text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">&times;</button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {/* 当前现金 / 手动修正 */}
+          {/* 当前现金 */}
           <div className="mb-1 text-xs text-[var(--tv-text-secondary)]">当前现金（含交易与流水）</div>
-          <div className="flex items-center gap-2">
-            <input
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              type="number"
-              step="0.01"
-              className="w-full rounded border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-2 text-lg font-semibold outline-none focus:border-[var(--tv-accent)]"
-            />
-            <button
-              onClick={handleSaveTotal}
-              className="shrink-0 rounded bg-[var(--tv-accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-80"
-            >
-              直接修正
-            </button>
-          </div>
+          <input
+            value={amount}
+            onChange={(e) => handleAmountChange(e.target.value)}
+            type="number"
+            step="0.01"
+            className="w-full rounded border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-2 text-lg font-semibold outline-none focus:border-[var(--tv-accent)]"
+          />
           <div className="mt-1 text-[11px] text-[var(--tv-text-secondary)]">
-            提示：日常入金/出金/分红等建议用下方「现金流水」记录，便于统计；「直接修正」用于一次性对账。
+            提示：日常入金/出金/分红等建议用下方「现金流水」记录，便于统计；修改此金额将自动保存。
           </div>
 
           {/* 新增流水 */}
@@ -113,31 +126,10 @@ export default function CashModal({ open, onClose }: CashModalProps) {
                   <option key={t} value={t}>{TYPE_LABELS[t]}</option>
                 ))}
               </select>
-              <input
-                value={txAmount}
-                onChange={(e) => setTxAmount(e.target.value)}
-                type="number"
-                step="0.01"
-                placeholder="金额"
-                className="w-24 rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm"
-              />
-              <input
-                value={txDate}
-                onChange={(e) => setTxDate(e.target.value)}
-                type="date"
-                className="rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm"
-              />
-              <input
-                value={txNote}
-                onChange={(e) => setTxNote(e.target.value)}
-                placeholder="备注（可选）"
-                className="min-w-[80px] flex-1 rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm"
-              />
-              <button
-                onClick={handleAddTx}
-                disabled={!txAmount || parseFloat(txAmount) <= 0}
-                className="rounded bg-[var(--tv-accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-              >
+              <input value={txAmount} onChange={(e) => setTxAmount(e.target.value)} type="number" step="0.01" placeholder="金额" className="w-24 rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm" />
+              <input value={txDate} onChange={(e) => setTxDate(e.target.value)} type="date" className="rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm" />
+              <input value={txNote} onChange={(e) => setTxNote(e.target.value)} placeholder="备注（可选）" className="min-w-[80px] flex-1 rounded border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2 py-1.5 text-sm" />
+              <button onClick={handleAddTx} disabled={!txAmount || parseFloat(txAmount) <= 0} className="rounded bg-[var(--tv-accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
                 添加
               </button>
             </div>
@@ -182,12 +174,6 @@ export default function CashModal({ open, onClose }: CashModalProps) {
               </table>
             )}
           </div>
-        </div>
-
-        <div className="flex justify-end border-t border-[var(--tv-border)] px-6 py-3">
-          <button onClick={onClose} className="rounded border border-[var(--tv-border)] px-4 py-2 text-sm text-[var(--tv-text-secondary)] hover:text-[var(--tv-text)]">
-            关闭
-          </button>
         </div>
       </div>
     </div>,
