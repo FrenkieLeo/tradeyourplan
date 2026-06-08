@@ -7,6 +7,7 @@ import type {
   JournalEntry,
   PortfolioSnapshot,
   TradePlan,
+  MegaCapResearch,
   DeletedTradeRef,
   CashTransaction,
 } from "@/types";
@@ -122,6 +123,7 @@ function mergeDailyReturns(a: DailyReturn[], b: DailyReturn[]): DailyReturn[] {
 interface SyncDoc {
   tradeRecords: TradeRecord[];
   tradePlans: TradePlan[];
+  megaCapResearches: MegaCapResearch[];
   journalEntries: JournalEntry[];
   snapshots: PortfolioSnapshot[];
   dailyReturns: DailyReturn[];
@@ -129,6 +131,7 @@ interface SyncDoc {
   deletedTradeUids: DeletedTradeRef[];
   deletedSnapshotDates: DeletedTradeRef[];
   deletedPlanIds: DeletedTradeRef[];
+  deletedMegaCapResearchIds: DeletedTradeRef[];
   deletedCashTxUids: DeletedTradeRef[];
   baseCash: number;
   baseCashUpdatedAt: number;
@@ -145,6 +148,7 @@ interface AppState {
   baseCash: number;
 
   tradePlans: TradePlan[];
+  megaCapResearches: MegaCapResearch[];
 
   journalEntries: JournalEntry[];
 
@@ -154,6 +158,7 @@ interface AppState {
   deletedTradeUids: DeletedTradeRef[];
   deletedSnapshotDates: DeletedTradeRef[];
   deletedPlanIds: DeletedTradeRef[];
+  deletedMegaCapResearchIds: DeletedTradeRef[];
   deletedCashTxUids: DeletedTradeRef[];
   baseCashUpdatedAt: number;
   activeSnapshotIndex: number | null;
@@ -179,6 +184,10 @@ interface AppState {
   addTradePlan: (plan: TradePlan) => void;
   updateTradePlan: (id: string, plan: Partial<TradePlan>) => void;
   removeTradePlan: (id: string) => void;
+
+  addMegaCapResearch: (item: MegaCapResearch) => void;
+  updateMegaCapResearch: (id: string, item: Partial<MegaCapResearch>) => void;
+  removeMegaCapResearch: (id: string) => void;
 
   addJournalEntry: (entry: JournalEntry) => void;
 
@@ -606,6 +615,7 @@ export const useStore = create<AppState>((set, get) => ({
   cash: { id: "cash", name: "现金", total: 10000 },
   baseCash: 10000,
   tradePlans: [],
+  megaCapResearches: [],
   journalEntries: [],
   snapshots: [],
   dailyReturns: [],
@@ -613,6 +623,7 @@ export const useStore = create<AppState>((set, get) => ({
   deletedTradeUids: [],
   deletedSnapshotDates: [],
   deletedPlanIds: [],
+  deletedMegaCapResearchIds: [],
   deletedCashTxUids: [],
   baseCashUpdatedAt: 0,
   activeSnapshotIndex: null,
@@ -620,9 +631,10 @@ export const useStore = create<AppState>((set, get) => ({
   isRefreshing: false,
 
   initialize: async () => {
-    const [records, plans, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt, storedSnapTombs, storedPlanTombs, storedCashTxs, storedCashTxTombs] = await Promise.all([
+    const [records, plans, researches, journals, snaps, storedDr, storedBaseCash, storedHoldings, storedOptionHoldings, storedTombstones, storedBaseCashUpdatedAt, storedSnapTombs, storedPlanTombs, storedResearchTombs, storedCashTxs, storedCashTxTombs] = await Promise.all([
       getItem<TradeRecord[]>("tradeRecords"),
       getItem<TradePlan[]>("tradePlans"),
+      getItem<MegaCapResearch[]>("megaCapResearches"),
       getItem<JournalEntry[]>("journalEntries"),
       getItem<PortfolioSnapshot[]>("snapshots"),
       getItem<{ date: string; return: number }[]>("dailyReturns"),
@@ -633,6 +645,7 @@ export const useStore = create<AppState>((set, get) => ({
       getItem<number>("baseCashUpdatedAt"),
       getItem<DeletedTradeRef[]>("deletedSnapshotDates"),
       getItem<DeletedTradeRef[]>("deletedPlanIds"),
+      getItem<DeletedTradeRef[]>("deletedMegaCapResearchIds"),
       getItem<CashTransaction[]>("cashTransactions"),
       getItem<DeletedTradeRef[]>("deletedCashTxUids"),
     ]);
@@ -648,6 +661,7 @@ export const useStore = create<AppState>((set, get) => ({
     const deletedTradeUids = storedTombstones ?? [];
     const deletedSnapshotDates = storedSnapTombs ?? [];
     const deletedPlanIds = storedPlanTombs ?? [];
+    const deletedMegaCapResearchIds = storedResearchTombs ?? [];
     const deletedCashTxUids = storedCashTxTombs ?? [];
     const cashTransactions = mergeUidList(storedCashTxs ?? [], [], deletedCashTxUids);
     const tradeRecords = mergeTradeRecords(normalizeTradeRecords(records ?? []), [], deletedTradeUids);
@@ -669,6 +683,12 @@ export const useStore = create<AppState>((set, get) => ({
       (p) => p.id,
       (p) => p.updatedAt ?? 0,
       deletedPlanIds
+    );
+    const megaCapResearches: MegaCapResearch[] = applyTombstones(
+      researches ?? [],
+      (r) => r.id,
+      (r) => r.updatedAt ?? 0,
+      deletedMegaCapResearchIds
     );
     const journalEntries = (journals ?? []).map((j) => {
       const old = j as JournalEntry & { targetType?: string };
@@ -701,6 +721,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       tradeRecords,
       tradePlans,
+      megaCapResearches,
       journalEntries,
       snapshots,
       dailyReturns: storedDr ?? [],
@@ -708,6 +729,7 @@ export const useStore = create<AppState>((set, get) => ({
       deletedTradeUids,
       deletedSnapshotDates,
       deletedPlanIds,
+      deletedMegaCapResearchIds,
       deletedCashTxUids,
       baseCashUpdatedAt: storedBaseCashUpdatedAt ?? 0,
       baseCash,
@@ -908,6 +930,35 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("deletedPlanIds", deletedPlanIds);
     markPendingSync("tradePlans", plans);
     markPendingSync("deletedPlanIds", deletedPlanIds);
+    get().syncToJsonBin();
+  },
+
+  addMegaCapResearch: (item) => {
+    const items = [...get().megaCapResearches, { ...item, updatedAt: Date.now() }];
+    set({ megaCapResearches: items });
+    setItem("megaCapResearches", items);
+    markPendingSync("megaCapResearches", items);
+    get().syncToJsonBin();
+  },
+
+  updateMegaCapResearch: (id, item) => {
+    const items = get().megaCapResearches.map((r) =>
+      r.id === id ? { ...r, ...item, updatedAt: Date.now() } : r
+    );
+    set({ megaCapResearches: items });
+    setItem("megaCapResearches", items);
+    markPendingSync("megaCapResearches", items);
+    get().syncToJsonBin();
+  },
+
+  removeMegaCapResearch: (id) => {
+    const items = get().megaCapResearches.filter((r) => r.id !== id);
+    const deletedMegaCapResearchIds = mergeTombstones(get().deletedMegaCapResearchIds, [{ uid: id, deletedAt: Date.now() }]);
+    set({ megaCapResearches: items, deletedMegaCapResearchIds });
+    setItem("megaCapResearches", items);
+    setItem("deletedMegaCapResearchIds", deletedMegaCapResearchIds);
+    markPendingSync("megaCapResearches", items);
+    markPendingSync("deletedMegaCapResearchIds", deletedMegaCapResearchIds);
     get().syncToJsonBin();
   },
 
@@ -1159,12 +1210,14 @@ export const useStore = create<AppState>((set, get) => ({
     const tradeRecords = normalizeTradeRecords(arr<TradeRecord>(d.tradeRecords));
     const snapshots = mergeSnapshots(arr<PortfolioSnapshot>(d.snapshots), []);
     const tradePlans = arr<TradePlan>(d.tradePlans);
+    const megaCapResearches = arr<MegaCapResearch>(d.megaCapResearches);
     const journalEntries = arr<JournalEntry>(d.journalEntries);
     const dailyReturns = arr<DailyReturn>(d.dailyReturns);
     const cashTransactions = arr<CashTransaction>(d.cashTransactions);
     const deletedTradeUids = arr<DeletedTradeRef>(d.deletedTradeUids);
     const deletedSnapshotDates = arr<DeletedTradeRef>(d.deletedSnapshotDates);
     const deletedPlanIds = arr<DeletedTradeRef>(d.deletedPlanIds);
+    const deletedMegaCapResearchIds = arr<DeletedTradeRef>(d.deletedMegaCapResearchIds);
     const deletedCashTxUids = arr<DeletedTradeRef>(d.deletedCashTxUids);
     const baseCash = typeof d.baseCash === "number" ? d.baseCash : get().baseCash;
     const baseCashUpdatedAt = Date.now();
@@ -1173,28 +1226,30 @@ export const useStore = create<AppState>((set, get) => ({
     const cash: CashReserve = { id: "cash", name: "现金", total: baseCash + calcTradeCashAdjustment(tradeRecords) + calcCashTxAdjustment(cashTransactions) };
 
     set({
-      tradeRecords, snapshots, tradePlans, journalEntries, dailyReturns, cashTransactions,
-      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedCashTxUids,
+      tradeRecords, snapshots, tradePlans, megaCapResearches, journalEntries, dailyReturns, cashTransactions,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedMegaCapResearchIds, deletedCashTxUids,
       baseCash, baseCashUpdatedAt, holdings, optionHoldings, cash,
       activeSnapshotIndex: null,
     });
     setItem("tradeRecords", tradeRecords);
     setItem("snapshots", snapshots);
     setItem("tradePlans", tradePlans);
+    setItem("megaCapResearches", megaCapResearches);
     setItem("journalEntries", journalEntries);
     setItem("dailyReturns", dailyReturns);
     setItem("cashTransactions", cashTransactions);
     setItem("deletedTradeUids", deletedTradeUids);
     setItem("deletedSnapshotDates", deletedSnapshotDates);
     setItem("deletedPlanIds", deletedPlanIds);
+    setItem("deletedMegaCapResearchIds", deletedMegaCapResearchIds);
     setItem("deletedCashTxUids", deletedCashTxUids);
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);
 
     // 恢复语义：直接覆盖云端，而非合并。
     const doc: SyncDoc = {
-      tradeRecords, tradePlans, journalEntries, snapshots, dailyReturns, cashTransactions,
-      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedCashTxUids,
+      tradeRecords, tradePlans, megaCapResearches, journalEntries, snapshots, dailyReturns, cashTransactions,
+      deletedTradeUids, deletedSnapshotDates, deletedPlanIds, deletedMegaCapResearchIds, deletedCashTxUids,
       baseCash, baseCashUpdatedAt, holdings, optionHoldings, updatedAt: Date.now(),
     };
     await writeData(doc);
@@ -1208,6 +1263,7 @@ export const useStore = create<AppState>((set, get) => ({
       const doc: SyncDoc = {
         tradeRecords: s.tradeRecords,
         tradePlans: s.tradePlans,
+        megaCapResearches: s.megaCapResearches,
         journalEntries: s.journalEntries,
         snapshots: s.snapshots,
         dailyReturns: s.dailyReturns,
@@ -1215,6 +1271,7 @@ export const useStore = create<AppState>((set, get) => ({
         deletedTradeUids: s.deletedTradeUids,
         deletedSnapshotDates: s.deletedSnapshotDates,
         deletedPlanIds: s.deletedPlanIds,
+        deletedMegaCapResearchIds: s.deletedMegaCapResearchIds,
         deletedCashTxUids: s.deletedCashTxUids,
         baseCash: s.baseCash,
         baseCashUpdatedAt: s.baseCashUpdatedAt,
@@ -1243,6 +1300,9 @@ export const useStore = create<AppState>((set, get) => ({
     const planTombs = remote
       ? mergeTombstones(remote.deletedPlanIds ?? [], s.deletedPlanIds)
       : s.deletedPlanIds;
+    const researchTombs = remote
+      ? mergeTombstones(remote.deletedMegaCapResearchIds ?? [], s.deletedMegaCapResearchIds)
+      : s.deletedMegaCapResearchIds;
     const cashTxTombs = remote
       ? mergeTombstones(remote.deletedCashTxUids ?? [], s.deletedCashTxUids)
       : s.deletedCashTxUids;
@@ -1258,6 +1318,9 @@ export const useStore = create<AppState>((set, get) => ({
     const tradePlans = remote
       ? applyTombstones(mergeById(remote.tradePlans ?? [], s.tradePlans), (x) => x.id, (x) => x.updatedAt ?? 0, planTombs)
       : s.tradePlans;
+    const megaCapResearches = remote
+      ? applyTombstones(mergeById(remote.megaCapResearches ?? [], s.megaCapResearches), (x) => x.id, (x) => x.updatedAt ?? 0, researchTombs)
+      : s.megaCapResearches;
     const journalEntries = remote ? mergeJournalEntries(remote.journalEntries ?? [], s.journalEntries) : s.journalEntries;
     const dailyReturns = remote ? mergeDailyReturns(remote.dailyReturns ?? [], s.dailyReturns) : s.dailyReturns;
     const remoteBaseAt = remote?.baseCashUpdatedAt ?? 0;
@@ -1274,6 +1337,7 @@ export const useStore = create<AppState>((set, get) => ({
     const doc: SyncDoc = {
       tradeRecords,
       tradePlans,
+      megaCapResearches,
       journalEntries,
       snapshots,
       dailyReturns,
@@ -1281,6 +1345,7 @@ export const useStore = create<AppState>((set, get) => ({
       deletedTradeUids: tombstones,
       deletedSnapshotDates: snapTombs,
       deletedPlanIds: planTombs,
+      deletedMegaCapResearchIds: researchTombs,
       deletedCashTxUids: cashTxTombs,
       baseCash,
       baseCashUpdatedAt,
@@ -1302,6 +1367,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       tradeRecords,
       tradePlans,
+      megaCapResearches,
       journalEntries,
       snapshots,
       dailyReturns,
@@ -1309,6 +1375,7 @@ export const useStore = create<AppState>((set, get) => ({
       deletedTradeUids: tombstones,
       deletedSnapshotDates: snapTombs,
       deletedPlanIds: planTombs,
+      deletedMegaCapResearchIds: researchTombs,
       deletedCashTxUids: cashTxTombs,
       baseCash,
       baseCashUpdatedAt,
@@ -1318,6 +1385,7 @@ export const useStore = create<AppState>((set, get) => ({
     });
     setItem("tradeRecords", tradeRecords);
     setItem("tradePlans", tradePlans);
+    setItem("megaCapResearches", megaCapResearches);
     setItem("journalEntries", journalEntries);
     setItem("snapshots", snapshots);
     setItem("dailyReturns", dailyReturns);
@@ -1325,6 +1393,7 @@ export const useStore = create<AppState>((set, get) => ({
     setItem("deletedTradeUids", tombstones);
     setItem("deletedSnapshotDates", snapTombs);
     setItem("deletedPlanIds", planTombs);
+    setItem("deletedMegaCapResearchIds", researchTombs);
     setItem("deletedCashTxUids", cashTxTombs);
     setItem("baseCash", baseCash);
     setItem("baseCashUpdatedAt", baseCashUpdatedAt);

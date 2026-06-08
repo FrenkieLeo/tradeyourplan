@@ -106,4 +106,22 @@ export interface TradePlan {
   cancelled: boolean;
 }
 
+export interface MegaCapResearch {
+  id: string;
+  companyName: string;
+  stockCode: string;
+  coreTech: string;
+  businessModel: string;
+  managementCulture: string;
+  mainBusiness: string;
+  revenue: string;
+  mainCustomers: string;
+  advantages: string;
+  disadvantages: string;
+  summary: string;
+  subSector: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 

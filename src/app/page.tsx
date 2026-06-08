@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useState } from "react";
 import { useStore } from "@/lib/store";
 import TotalPortfolio from "@/components/TotalPortfolio";
 import StockChart from "@/components/StockChart";
@@ -11,14 +11,16 @@ import PriceUpdater from "@/components/PriceUpdater";
 import DataBackup from "@/components/DataBackup";
 import AllocationChart from "@/components/AllocationChart";
 import BenchmarkChart from "@/components/BenchmarkChart";
+import MegaCapResearchList from "@/components/MegaCapResearchList";
+
+type Viewport = "portfolio" | "research";
 
 export default function Home() {
-  const { holdings, optionHoldings, loaded, syncToJsonBin, isRefreshing } = useStore();
-
-  // 同步仅由 PriceEditModal 保存后触发；不再自动覆盖 JSONBin
+  const { holdings, optionHoldings, loaded, isRefreshing } = useStore();
+  const [viewport, setViewport] = useState<Viewport>("portfolio");
 
   return (
-    <div className="min-h-screen bg-[var(--tv-bg)]">
+    <div className="min-h-screen overflow-hidden bg-[var(--tv-bg)]">
       <PriceUpdater />
 
       {!loaded ? (
@@ -31,7 +33,7 @@ export default function Home() {
       ) : (
         <>
           {isRefreshing && (
-            <div className="sticky top-0 z-40 bg-[#2962ff]/10 border-b border-[#2962ff]/30 backdrop-blur-sm">
+            <div className="sticky top-0 z-40 border-b border-[#2962ff]/30 bg-[#2962ff]/10 backdrop-blur-sm">
               <div className="mx-auto flex max-w-5xl items-center justify-center gap-2 px-4 py-2 text-sm text-[#2962ff]">
                 <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -41,43 +43,94 @@ export default function Home() {
               </div>
             </div>
           )}
-          <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
-            <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-              <h1 className="text-lg font-bold text-[var(--tv-text)]">TradeYourPlan</h1>
-              <DataBackup />
+
+          <div
+            className="flex transition-transform duration-500 ease-in-out"
+            style={{
+              width: "200%",
+              transform: viewport === "portfolio" ? "translateX(0)" : "translateX(-50%)",
+            }}
+          >
+            {/* 投资组合视窗 */}
+            <div className="w-1/2 shrink-0">
+              <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
+                <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+                  <h1 className="text-lg font-bold text-[var(--tv-text)]">TradeYourPlan</h1>
+                  <DataBackup />
+                </div>
+              </header>
+
+              <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
+                <TimelineSlider />
+                <TotalPortfolio />
+                <BenchmarkChart />
+                <AllocationChart />
+
+                {holdings.length > 0 && (
+                  <div>
+                    <h2 className="mb-4 text-base font-semibold">个股持仓收益</h2>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {holdings.map((h) => (
+                        <StockChart key={h.id} holding={h} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {optionHoldings.length > 0 && (
+                  <div>
+                    <h2 className="mb-4 text-base font-semibold">期权持仓收益</h2>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {optionHoldings.map((o) => (
+                        <OptionChart key={o.id} option={o} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <TradePlan />
+              </main>
             </div>
-          </header>
 
-          <main className="mx-auto max-w-5xl px-4 py-6 space-y-6">
-            <TimelineSlider />
-            <TotalPortfolio />
-            <BenchmarkChart />
-            <AllocationChart />
-
-            {holdings.length > 0 && (
-              <div>
-                <h2 className="mb-4 text-base font-semibold">个股持仓收益</h2>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {holdings.map((h) => (
-                    <StockChart key={h.id} holding={h} />
-                  ))}
+            {/* 研究清单视窗 */}
+            <div className="w-1/2 shrink-0">
+              <header className="sticky top-0 z-30 border-b border-[var(--tv-border)] bg-[var(--tv-bg)]/95 backdrop-blur-sm">
+                <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+                  <h1 className="text-lg font-bold text-[var(--tv-text)]">千亿市值公司研究清单</h1>
+                  <DataBackup />
                 </div>
-              </div>
-            )}
+              </header>
 
-            {optionHoldings.length > 0 && (
-              <div>
-                <h2 className="mb-4 text-base font-semibold">期权持仓收益</h2>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {optionHoldings.map((o) => (
-                    <OptionChart key={o.id} option={o} />
-                  ))}
-                </div>
-              </div>
-            )}
+              <main className="mx-auto max-w-6xl px-4 py-6">
+                <MegaCapResearchList />
+              </main>
+            </div>
+          </div>
 
-            <TradePlan />
-          </main>
+          {/* 视窗切换按钮 */}
+          {viewport === "portfolio" ? (
+            <button
+              onClick={() => setViewport("research")}
+              className="fixed right-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-l-lg border border-r-0 border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-4 text-sm text-[var(--tv-text)] shadow-lg transition-colors hover:border-[var(--tv-accent)] hover:text-[var(--tv-accent)]"
+              title="前往研究清单"
+            >
+              <span className="text-xs [writing-mode:vertical-rl]">研究清单</span>
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={() => setViewport("portfolio")}
+              className="fixed left-0 top-1/2 z-50 flex -translate-y-1/2 items-center gap-1 rounded-r-lg border border-l-0 border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] px-3 py-4 text-sm text-[var(--tv-text)] shadow-lg transition-colors hover:border-[var(--tv-accent)] hover:text-[var(--tv-accent)]"
+              title="返回投资组合"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              <span className="text-xs [writing-mode:vertical-rl]">投资组合</span>
+            </button>
+          )}
         </>
       )}
     </div>
