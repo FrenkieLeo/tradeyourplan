@@ -207,8 +207,12 @@ export default function PriceUpdater() {
         const lastSync = await getItem<string>("lastQuoteSync");
         if (lastSync == null || lastSync < expected) {
           console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync });
-          await fetchLatestQuotes();
-          await setItem("lastQuoteSync", expected);
+          const ok = await fetchLatestQuotes();
+          if (ok) {
+            await setItem("lastQuoteSync", expected);
+          } else {
+            console.warn("[PriceUpdater] fetchLatestQuotes returned false, will retry next load");
+          }
         } else {
           console.log("[PriceUpdater] quotes already up to date, skip fetch", { expected, lastSync });
         }
