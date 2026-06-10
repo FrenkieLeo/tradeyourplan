@@ -69,12 +69,17 @@ export interface CashReserve {
   total: number;
 }
 
+export type JournalSentiment = "bullish" | "bearish" | "neutral";
+
 export interface JournalEntry {
   id: string;
   targetType: "STOCK" | "OPTION";
   name: string;
   time: number;
   content: string;
+  sentiment?: JournalSentiment;
+  uid?: string;
+  updatedAt?: number;
 }
 
 export interface PortfolioSnapshot {
@@ -91,6 +96,8 @@ export interface DailyPricePoint {
   return: number;
 }
 
+export type TradePlanStatus = "pending" | "executed" | "cancelled";
+
 export interface TradePlan {
   id: string;
   stockName: string;
@@ -104,6 +111,7 @@ export interface TradePlan {
   createdAt: number;
   updatedAt: number;
   cancelled: boolean;
+  status?: TradePlanStatus;
 }
 
 export interface MegaCapResearch {

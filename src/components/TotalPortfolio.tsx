@@ -33,16 +33,6 @@ export default function TotalPortfolio() {
       ? parseFloat(((totalRevenue / totalCost) * 100).toFixed(2))
       : 0;
 
-  console.log("[TotalPortfolio] displayData:", {
-    activeSnapshotIndex,
-    hasSnapshot: !!displayData,
-    displayHoldings: displayHoldings.map((h) => ({ id: h.id, nowPrice: h.nowPrice, price: h.price, number: h.number, cost: h.cost, revenue: h.revenue })),
-    totalValue,
-    totalCost,
-    totalRevenue,
-    totalReturn,
-  });
-
   useEffect(() => {
     if (!chartRef.current) return;
 

@@ -199,6 +199,8 @@ interface AppState {
   removeFundamentalEntry: (id: string) => void;
 
   addJournalEntry: (entry: JournalEntry) => void;
+  updateJournalEntry: (uid: string, updates: Partial<JournalEntry>) => void;
+  removeJournalEntry: (uid: string) => void;
 
   takeSnapshot: () => void;
   updateHistoricalPrices: (updates: { date: string; id: string; value: number; type?: "stock" | "option" }[]) => void;
@@ -1014,7 +1016,26 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   addJournalEntry: (entry) => {
-    const entries = [...get().journalEntries, entry];
+    const rec = { ...entry, uid: entry.uid || newUid(), updatedAt: Date.now() };
+    const entries = [...get().journalEntries, rec];
+    set({ journalEntries: entries });
+    setItem("journalEntries", entries);
+    markPendingSync("journalEntries", entries);
+    get().syncToJsonBin();
+  },
+
+  updateJournalEntry: (uid, updates) => {
+    const entries = get().journalEntries.map((e) =>
+      e.uid === uid ? { ...e, ...updates, updatedAt: Date.now() } : e
+    );
+    set({ journalEntries: entries });
+    setItem("journalEntries", entries);
+    markPendingSync("journalEntries", entries);
+    get().syncToJsonBin();
+  },
+
+  removeJournalEntry: (uid) => {
+    const entries = get().journalEntries.filter((e) => e.uid !== uid);
     set({ journalEntries: entries });
     setItem("journalEntries", entries);
     markPendingSync("journalEntries", entries);

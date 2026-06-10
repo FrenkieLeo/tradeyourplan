@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import { useStore } from "@/lib/store";
 import JournalTimeline from "./JournalTimeline";
+import ValuationBar from "./ValuationBar";
 import type { StockHolding } from "@/types";
 
 interface StockChartProps {
@@ -32,24 +33,8 @@ export default function StockChart({ holding }: StockChartProps) {
     if (h) allPoints.push({ date: s.date.slice(5), return: h.revenuePercentage });
   }
 
-  if (typeof window !== "undefined") {
-    console.log(`[StockChart] ${holding.id}: allPoints=${allPoints.length}, snapshots=${snapshots.length}`);
-    console.log(`[StockChart] ${holding.id} displayHolding:`, {
-      activeSnapshotIndex,
-      name: displayHolding.name,
-      number: displayHolding.number,
-      price: displayHolding.price,
-      nowPrice: displayHolding.nowPrice,
-      cost: displayHolding.cost,
-      total: displayHolding.total,
-      revenue: displayHolding.revenue,
-      revenuePercentage: displayHolding.revenuePercentage,
-      fromSnapshot: !!displayData,
-      snapshotDate: displayData?.date,
-    });
-    if (snapshots.length > 0 && allPoints.length === 0) {
-      console.warn(`[StockChart] ${holding.id}: snapshots exist but no matching data. Check ID match: holding.id=${holding.id}, snapshot holding IDs:`, snapshots[0].holdings.map((h) => h.id));
-    }
+  if (typeof window !== "undefined" && snapshots.length > 0 && allPoints.length === 0) {
+    console.warn(`[StockChart] ${holding.id}: snapshots exist but no matching data`);
   }
 
   useEffect(() => {
@@ -195,6 +180,7 @@ export default function StockChart({ holding }: StockChartProps) {
               <span>现价: {displayHolding.nowPrice === 0 ? '--' : `$${displayHolding.nowPrice.toFixed(2)}`}</span>
               <span>市值: {displayHolding.total === 0 ? '--' : `$${displayHolding.total.toLocaleString()}`}</span>
             </div>
+            <ValuationBar stockId={holding.id} nowPrice={displayHolding.nowPrice} />
             <div ref={chartRef} className="h-36 w-full" />
           </>
         )}

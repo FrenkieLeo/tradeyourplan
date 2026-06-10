@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import * as echarts from "echarts";
 import { useStore } from "@/lib/store";
 
@@ -12,18 +12,29 @@ const PALETTE = [
 export default function AllocationChart() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { holdings, optionHoldings, cash, isRefreshing } = useStore();
+  const { holdings, optionHoldings, cash, activeSnapshotIndex, snapshots, isRefreshing } = useStore();
 
-  const items: { name: string; value: number }[] = [];
-  for (const h of holdings) {
-    const v = h.total > 0 ? h.total : h.cost;
-    if (v > 0) items.push({ name: h.name || h.id, value: parseFloat(v.toFixed(2)) });
-  }
-  for (const o of optionHoldings) {
-    const v = o.currentValue > 0 ? o.currentValue : o.totalCost;
-    if (v > 0) items.push({ name: o.name || o.id, value: parseFloat(v.toFixed(2)) });
-  }
-  if (cash.total > 0) items.push({ name: "现金", value: parseFloat(cash.total.toFixed(2)) });
+  const displayData = activeSnapshotIndex !== null && snapshots[activeSnapshotIndex]
+    ? snapshots[activeSnapshotIndex]
+    : null;
+
+  const displayHoldings = displayData ? displayData.holdings : holdings;
+  const displayOptions = displayData ? displayData.optionHoldings : optionHoldings;
+  const displayCash = displayData ? displayData.cash : cash;
+
+  const items = useMemo(() => {
+    const arr: { name: string; value: number }[] = [];
+    for (const h of displayHoldings) {
+      const v = h.total > 0 ? h.total : h.cost;
+      if (v > 0) arr.push({ name: h.name || h.id, value: parseFloat(v.toFixed(2)) });
+    }
+    for (const o of displayOptions) {
+      const v = o.currentValue > 0 ? o.currentValue : o.totalCost;
+      if (v > 0) arr.push({ name: o.name || o.id, value: parseFloat(v.toFixed(2)) });
+    }
+    if (displayCash.total > 0) arr.push({ name: "现金", value: parseFloat(displayCash.total.toFixed(2)) });
+    return arr;
+  }, [displayHoldings, displayOptions, displayCash]);
 
   const totalAll = items.reduce((s, i) => s + i.value, 0);
 
@@ -76,7 +87,12 @@ export default function AllocationChart() {
     <div className="rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg-secondary)] p-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-base font-semibold">资产配置</h2>
-        <span className="text-xs text-[var(--tv-text-secondary)]">总计 ${totalAll.toLocaleString()}</span>
+        <div className="flex items-center gap-2">
+          {displayData && (
+            <span className="text-[10px] text-[var(--tv-accent)]">{displayData.date}</span>
+          )}
+          <span className="text-xs text-[var(--tv-text-secondary)]">总计 ${totalAll.toLocaleString()}</span>
+        </div>
       </div>
       <div ref={chartRef} className="h-56 w-full" />
     </div>
