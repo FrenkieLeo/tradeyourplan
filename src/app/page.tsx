@@ -13,6 +13,8 @@ import AllocationChart from "@/components/AllocationChart";
 import BenchmarkChart from "@/components/BenchmarkChart";
 import MegaCapResearchList from "@/components/MegaCapResearchList";
 import FundamentalList from "@/components/FundamentalList";
+import TradeReview from "@/components/TradeReview";
+import AttributionChart from "@/components/AttributionChart";
 
 type Viewport = "fundamental" | "portfolio" | "research";
 
@@ -84,6 +86,7 @@ export default function Home() {
                 <TimelineSlider />
                 <TotalPortfolio />
                 <BenchmarkChart />
+                <AttributionChart />
                 <AllocationChart />
 
                 {holdings.length > 0 && (
@@ -108,6 +111,7 @@ export default function Home() {
                   </div>
                 )}
 
+                <TradeReview />
                 <TradePlan />
               </main>
             </div>

@@ -12,7 +12,7 @@ interface OptionEditModalProps {
 }
 
 export default function OptionEditModal({ option, open, onClose }: OptionEditModalProps) {
-  const { updateOptionHolding } = useStore();
+  const { updateOptionHolding, syncToJsonBin } = useStore();
 
   const [name, setName] = useState("");
   const [underlying, setUnderlying] = useState("");
@@ -57,7 +57,8 @@ export default function OptionEditModal({ option, open, onClose }: OptionEditMod
       averagePremium: a,
       nowPremium: isNaN(n) || n <= 0 ? option.nowPremium : n,
     });
-  }, [name, underlying, type, strike, expiration, contracts, avgPremium, nowPremium, option, updateOptionHolding]);
+    syncToJsonBin();
+  }, [name, underlying, type, strike, expiration, contracts, avgPremium, nowPremium, option, updateOptionHolding, syncToJsonBin]);
 
   const scheduleAutoSave = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
