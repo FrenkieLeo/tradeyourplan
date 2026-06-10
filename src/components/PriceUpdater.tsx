@@ -202,11 +202,14 @@ export default function PriceUpdater() {
 
       // 自动从 Alpha Vantage 拉取最新收盘价（已验证数据源准确）。
       // 节流：每个「已收盘交易日」最多尝试一次，避免触碰免费档每日额度。
+      // 额外校验：若 lastQuoteSync 已标记但最新快照仍落后（旧版 bug 残留），强制重试。
       try {
         const expected = lastCompletedTradingDayET();
         const lastSync = await getItem<string>("lastQuoteSync");
-        if (lastSync == null || lastSync < expected) {
-          console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync });
+        const latestSnapDate = useStore.getState().snapshots.at(-1)?.date;
+        const snapshotBehind = latestSnapDate != null && latestSnapDate < expected;
+        if (lastSync == null || lastSync < expected || snapshotBehind) {
+          console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync, latestSnapDate });
           const ok = await fetchLatestQuotes();
           if (ok) {
             await setItem("lastQuoteSync", expected);
