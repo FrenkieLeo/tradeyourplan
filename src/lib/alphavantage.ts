@@ -46,8 +46,12 @@ export async function fetchQuote(symbol: string): Promise<StockQuote | null> {
       { cache: "no-store" }
     );
     if (!res.ok) return null;
-    const data: AlphaVantageQuote = await res.json();
-    const quote = data["Global Quote"];
+    const data = await res.json();
+    if (isAvRateLimited(data)) {
+      console.warn("[fetchQuote] Alpha Vantage rate limited for", symbol);
+      return null;
+    }
+    const quote = (data as AlphaVantageQuote)["Global Quote"];
     if (!quote || !quote["05. price"]) return null;
 
     return {
@@ -112,31 +116,51 @@ export async function fetchDailyCloses(symbol: string): Promise<Record<string, n
   }
 }
 
-export function getETDate(): string {
-  const now = new Date();
-  return now.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+const ET_TZ = "America/New_York";
+const ET_WEEKDAY: Record<string, number> = {
+  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+};
+
+// 用 formatToParts 取美东时间分量，避免 toLocaleString → new Date 在浏览器本地时区下解析错误。
+function getETComponents(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const v = (type: string) => parts.find((p) => p.type === type)?.value ?? "0";
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: ET_TZ,
+    weekday: "short",
+  }).format(now);
+  return {
+    year: v("year"),
+    month: v("month"),
+    day: v("day"),
+    hour: parseInt(v("hour"), 10),
+    minute: parseInt(v("minute"), 10),
+    dayOfWeek: ET_WEEKDAY[weekday.slice(0, 3)] ?? 0,
+  };
 }
 
-export function isAfterMarketClose(): boolean {
-  const now = new Date();
-  const et = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/New_York" })
-  );
-  const day = et.getDay();
-
-  if (day === 0 || day === 6) return false;
-
-  const totalMinutes = et.getHours() * 60 + et.getMinutes();
-  return totalMinutes >= 16 * 60;
+export function getETDate(now = new Date()): string {
+  const { year, month, day } = getETComponents(now);
+  return `${year}-${month}-${day}`;
 }
 
-export function isWeekend(): boolean {
-  const now = new Date();
-  const et = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/New_York" })
-  );
-  const day = et.getDay();
-  return day === 0 || day === 6;
+export function isAfterMarketClose(now = new Date()): boolean {
+  const { dayOfWeek, hour, minute } = getETComponents(now);
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+  return hour * 60 + minute >= 16 * 60;
+}
+
+export function isWeekend(now = new Date()): boolean {
+  const { dayOfWeek } = getETComponents(now);
+  return dayOfWeek === 0 || dayOfWeek === 6;
 }
 
 // 一个收盘价是否「已定型」：早于今日(美东)，或就是今日且已收盘。
@@ -149,24 +173,27 @@ export function isFinalizedTradingDate(date: string): boolean {
 // 最近一个「已收盘」的交易日（美东时间，YYYY-MM-DD）。
 // 仅按周末做粗略推算（不含法定节假日），用于节流自动拉取，不参与日期标注——
 // 真正的快照日期一律以 Alpha Vantage 返回的 "latest trading day" 为准。
-export function lastCompletedTradingDayET(): string {
-  const now = new Date();
-  const et = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/New_York" })
-  );
+export function lastCompletedTradingDayET(now = new Date()): string {
+  const { year, month, day, dayOfWeek, hour, minute } = getETComponents(now);
   const closedToday =
-    et.getDay() !== 0 &&
-    et.getDay() !== 6 &&
-    et.getHours() * 60 + et.getMinutes() >= 16 * 60;
+    dayOfWeek !== 0 &&
+    dayOfWeek !== 6 &&
+    hour * 60 + minute >= 16 * 60;
 
-  const cursor = new Date(et.getFullYear(), et.getMonth(), et.getDate());
-  if (!closedToday) cursor.setDate(cursor.getDate() - 1);
-  while (cursor.getDay() === 0 || cursor.getDay() === 6) {
-    cursor.setDate(cursor.getDate() - 1);
+  const cursor = new Date(Date.UTC(+year, +month - 1, +day));
+  if (!closedToday) cursor.setUTCDate(cursor.getUTCDate() - 1);
+  while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
   }
 
-  const yy = cursor.getFullYear();
-  const mm = String(cursor.getMonth() + 1).padStart(2, "0");
-  const dd = String(cursor.getDate()).padStart(2, "0");
+  const yy = cursor.getUTCFullYear();
+  const mm = String(cursor.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(cursor.getUTCDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+export function isAvRateLimited(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return typeof d.Note === "string" || typeof d.Information === "string";
 }

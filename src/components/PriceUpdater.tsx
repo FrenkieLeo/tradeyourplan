@@ -211,10 +211,16 @@ export default function PriceUpdater() {
         if (lastSync == null || lastSync < expected || snapshotBehind) {
           console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync, latestSnapDate });
           const ok = await fetchLatestQuotes();
-          if (ok) {
+          const newLatest = useStore.getState().snapshots.at(-1)?.date;
+          if (ok && newLatest != null && newLatest >= expected) {
             await setItem("lastQuoteSync", expected);
+            console.log("[PriceUpdater] quotes synced", { expected, newLatest });
           } else {
-            console.warn("[PriceUpdater] fetchLatestQuotes returned false, will retry next load");
+            console.warn("[PriceUpdater] fetchLatestQuotes incomplete, will retry next load", {
+              expected,
+              newLatest,
+              ok,
+            });
           }
         } else {
           console.log("[PriceUpdater] quotes already up to date, skip fetch", { expected, lastSync });

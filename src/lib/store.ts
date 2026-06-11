@@ -14,7 +14,13 @@ import type {
 } from "@/types";
 import { getItem, setItem, markPendingSync, clearAllPendingSyncs } from "./db";
 import { writeData, readData } from "./jsonbin";
-import { fetchQuote, isFinalizedTradingDate } from "./alphavantage";
+import {
+  fetchQuote,
+  getETDate,
+  isAfterMarketClose,
+  isWeekend,
+  lastCompletedTradingDayET,
+} from "./alphavantage";
 
 // 生成跨设备唯一的交易 uid。
 function newUid(): string {
@@ -1044,16 +1050,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   takeSnapshot: () => {
     const { holdings, optionHoldings, cash } = get();
-    const date = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const date = getETDate();
 
     // 市场未收盘时跳过，无论当日快照是否存在都禁止提前生成/覆盖
-    const now = new Date();
-    const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const day = et.getDay();
-    const isWeekend = day === 0 || day === 6;
-    const totalMinutes = et.getHours() * 60 + et.getMinutes();
-    const afterClose = !isWeekend && totalMinutes >= 16 * 60;
-    if (!afterClose) {
+    if (isWeekend() || !isAfterMarketClose()) {
       console.log("[takeSnapshot] skipping - market not closed yet for", date);
       return;
     }
@@ -1253,16 +1253,32 @@ export const useStore = create<AppState>((set, get) => ({
     const stocks = get().holdings;
     if (stocks.length === 0) return false;
 
+    const expected = lastCompletedTradingDayET();
+    const latestSnapDate = get().snapshots.at(-1)?.date;
     const updates: { date: string; id: string; value: number; type: "stock" }[] = [];
+
     for (const h of stocks) {
-      const quote = await fetchQuote(h.id);
+      let quote = await fetchQuote(h.id);
+      // 突发限速时退避重试一次
+      if (!quote) {
+        await new Promise((r) => setTimeout(r, 2000));
+        quote = await fetchQuote(h.id);
+      }
       if (
         quote &&
         quote.price > 0 &&
         quote.latestTradingDay &&
-        isFinalizedTradingDate(quote.latestTradingDay)
+        quote.latestTradingDay <= expected
       ) {
         updates.push({ date: quote.latestTradingDay, id: h.id, value: quote.price, type: "stock" });
+      } else {
+        console.warn("[fetchLatestQuotes] skipped quote", {
+          id: h.id,
+          expected,
+          latestSnapDate,
+          quoteDay: quote?.latestTradingDay,
+          price: quote?.price,
+        });
       }
       // 尊重免费档突发限制（约 1 次/秒）
       await new Promise((r) => setTimeout(r, 1200));
@@ -1271,7 +1287,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (updates.length === 0) return false;
     get().updateHistoricalPrices(updates);
     await get().syncToJsonBin();
-    return true;
+
+    const newLatest = get().snapshots.at(-1)?.date;
+    const caughtUp = newLatest != null && newLatest >= expected;
+    if (!caughtUp) {
+      console.warn("[fetchLatestQuotes] snapshot still behind after update", { expected, newLatest });
+    }
+    return caughtUp;
   },
 
   // 从备份 JSON 恢复：以备份内容覆盖本地与云端（恢复语义）。

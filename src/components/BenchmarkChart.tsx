@@ -47,7 +47,7 @@ function closeForDate(closes: Record<string, number>, sortedDates: string[], dat
 export default function BenchmarkChart() {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<echarts.ECharts | null>(null);
-  const { snapshots, isRefreshing } = useStore();
+  const { snapshots, isRefreshing, loaded } = useStore();
   const [benchData, setBenchData] = useState<Record<string, Record<string, number>>>({});
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -55,7 +55,8 @@ export default function BenchmarkChart() {
   const dates = snapshots.map((s) => s.date);
 
   useEffect(() => {
-    if (snapshots.length < 2) return;
+    // 等 PriceUpdater 完成持仓收盘价拉取后再请求基准数据，避免并发抢占 AV 免费配额。
+    if (!loaded || isRefreshing || snapshots.length < 2) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -71,7 +72,7 @@ export default function BenchmarkChart() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshots.length, dates.join(",")]);
+  }, [loaded, isRefreshing, snapshots.length, dates.join(",")]);
 
   useEffect(() => {
     if (!chartRef.current || snapshots.length < 2) return;
