@@ -22,6 +22,7 @@ import {
   isWeekend,
   lastCompletedTradingDayET,
 } from "./alphavantage";
+import { blackScholesPrice, yearsUntilExpiration } from "./blackScholes";
 
 // 生成跨设备唯一的交易 uid。
 function newUid(): string {
@@ -1297,23 +1298,34 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isRefreshing: refreshing });
   },
 
-  // 从 Alpha Vantage 拉取各股票最新收盘价，按接口返回的「latest trading day」标注日期，
+  // 从 Alpha Vantage 拉取股票及期权底层的最新收盘价，按接口返回的「latest trading day」标注日期，
   // 仅采纳已定型（收盘后/历史）的报价，避免把盘中实时价写入快照。
+  // 期权权利金不直接拉取（免费档无期权链支持），用 Black-Scholes 根据底层收盘价估算。
   // 返回是否实际写入了更新，便于调用方决定是否记录节流标记。
   fetchLatestQuotes: async () => {
     const stocks = get().holdings;
-    if (stocks.length === 0) return false;
+    const options = get().optionHoldings;
+    if (stocks.length === 0 && options.length === 0) return false;
 
     const expected = lastCompletedTradingDayET();
     const latestSnapDate = get().snapshots.at(-1)?.date;
-    const updates: { date: string; id: string; value: number; type: "stock" }[] = [];
 
-    for (const h of stocks) {
-      let quote = await fetchQuote(h.id);
+    // 汇总所有需要拉取的底层 symbol（股票持仓 + 期权底层），去重避免重复请求。
+    const underlyingSymbols = new Set<string>();
+    for (const h of stocks) underlyingSymbols.add(h.id);
+    for (const o of options) {
+      if (o.underlyingSymbol) underlyingSymbols.add(o.underlyingSymbol);
+    }
+
+    type ResolvedQuote = { price: number; latestTradingDay: string };
+    const quoteCache = new Map<string, ResolvedQuote>();
+
+    for (const symbol of underlyingSymbols) {
+      let quote = await fetchQuote(symbol);
       // 突发限速时退避重试一次
       if (!quote) {
         await new Promise((r) => setTimeout(r, 2000));
-        quote = await fetchQuote(h.id);
+        quote = await fetchQuote(symbol);
       }
       if (
         quote &&
@@ -1321,10 +1333,10 @@ export const useStore = create<AppState>((set, get) => ({
         quote.latestTradingDay &&
         quote.latestTradingDay <= expected
       ) {
-        updates.push({ date: quote.latestTradingDay, id: h.id, value: quote.price, type: "stock" });
+        quoteCache.set(symbol, { price: quote.price, latestTradingDay: quote.latestTradingDay });
       } else {
-        console.warn("[fetchLatestQuotes] skipped quote", {
-          id: h.id,
+        console.warn("[fetchLatestQuotes] skipped underlying quote", {
+          symbol,
           expected,
           latestSnapDate,
           quoteDay: quote?.latestTradingDay,
@@ -1333,6 +1345,28 @@ export const useStore = create<AppState>((set, get) => ({
       }
       // 尊重免费档突发限制（约 1 次/秒）
       await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    const updates: { date: string; id: string; value: number; type: "stock" | "option" }[] = [];
+
+    for (const h of stocks) {
+      const q = quoteCache.get(h.id);
+      if (q) updates.push({ date: q.latestTradingDay, id: h.id, value: q.price, type: "stock" });
+    }
+
+    for (const o of options) {
+      const q = quoteCache.get(o.underlyingSymbol);
+      if (!q) continue;
+      const T = yearsUntilExpiration(o.expirationDate, q.latestTradingDay);
+      const premium = blackScholesPrice({
+        underlyingPrice: q.price,
+        strikePrice: o.strikePrice,
+        timeToExpirationYears: T,
+        type: o.type,
+      });
+      // 权利金保留 4 位小数；0 也是有效值（深度虚值或已过期）。
+      const rounded = Math.max(0, parseFloat(premium.toFixed(4)));
+      updates.push({ date: q.latestTradingDay, id: o.id, value: rounded, type: "option" });
     }
 
     if (updates.length === 0) return false;
@@ -1536,47 +1570,98 @@ export const useStore = create<AppState>((set, get) => ({
     }
     if (ok) await clearAllPendingSyncs();
 
-    // 回灌合并结果，保证本设备与云端一致。
+    // 防并发覆盖：在本次 sync 的 await 期间（readData / writeData 重试），
+    // 用户可能新增了 rough / fundamental / journal / trade 等条目。
+    // 这些条目在 sync 开头捕获的 s 里不存在，若直接 set(sync 计算结果) 会被覆盖。
+    // 解法：在最终回灌之前重新 get() 最新 state，把本次结果与最新 state 再合并一次。
+    // 漏推 JSONBin 的新增条目会被它们各自触发的 syncToJsonBin 推上去，不影响最终一致性。
+    const latest = get();
+
+    const finalTombstones = mergeTombstones(tombstones, latest.deletedTradeUids);
+    const finalSnapTombs = mergeTombstones(snapTombs, latest.deletedSnapshotDates);
+    const finalPlanTombs = mergeTombstones(planTombs, latest.deletedPlanIds);
+    const finalResearchTombs = mergeTombstones(researchTombs, latest.deletedMegaCapResearchIds);
+    const finalFundamentalTombs = mergeTombstones(fundamentalTombs, latest.deletedFundamentalEntryIds);
+    const finalRoughTombs = mergeTombstones(roughTombs, latest.deletedRoughValuationEntryIds);
+    const finalCashTxTombs = mergeTombstones(cashTxTombs, latest.deletedCashTxUids);
+
+    const finalTradeRecords = mergeTradeRecords(tradeRecords, latest.tradeRecords, finalTombstones);
+    const finalTradePlans = applyTombstones(
+      mergeById(tradePlans, latest.tradePlans),
+      (x) => x.id, (x) => x.updatedAt ?? 0, finalPlanTombs
+    );
+    const finalMegaCapResearches = applyTombstones(
+      mergeById(megaCapResearches, latest.megaCapResearches),
+      (x) => x.id, (x) => x.updatedAt ?? 0, finalResearchTombs
+    );
+    const finalFundamentalEntries = applyTombstones(
+      mergeById(fundamentalEntries, latest.fundamentalEntries),
+      (x) => x.id, (x) => x.updatedAt ?? 0, finalFundamentalTombs
+    );
+    const finalRoughValuationEntries = applyTombstones(
+      mergeById(roughValuationEntries, latest.roughValuationEntries),
+      (x) => x.id, (x) => x.updatedAt ?? 0, finalRoughTombs
+    );
+    const finalJournalEntries = mergeJournalEntries(journalEntries, latest.journalEntries);
+    const finalSnapshots = applyTombstones(
+      mergeSnapshots(snapshots, latest.snapshots),
+      (x) => x.date, (x) => x.timestamp ?? 0, finalSnapTombs
+    );
+    const finalDailyReturns = mergeDailyReturns(dailyReturns, latest.dailyReturns);
+    const finalCashTransactions = mergeUidList(cashTransactions, latest.cashTransactions, finalCashTxTombs);
+
+    const finalBaseCashUpdatedAt = Math.max(latest.baseCashUpdatedAt, baseCashUpdatedAt);
+    const finalBaseCash = latest.baseCashUpdatedAt > baseCashUpdatedAt ? latest.baseCash : baseCash;
+
+    const { holdings: finalHoldings, optionHoldings: finalOptionHoldings } = deriveHoldings(
+      finalTradeRecords, finalSnapshots, latest.holdings, latest.optionHoldings
+    );
+    const finalCash: CashReserve = {
+      id: "cash",
+      name: "现金",
+      total: finalBaseCash + calcTradeCashAdjustment(finalTradeRecords) + calcCashTxAdjustment(finalCashTransactions),
+    };
+
     set({
-      tradeRecords,
-      tradePlans,
-      megaCapResearches,
-      fundamentalEntries,
-      roughValuationEntries,
-      journalEntries,
-      snapshots,
-      dailyReturns,
-      cashTransactions,
-      deletedTradeUids: tombstones,
-      deletedSnapshotDates: snapTombs,
-      deletedPlanIds: planTombs,
-      deletedMegaCapResearchIds: researchTombs,
-      deletedFundamentalEntryIds: fundamentalTombs,
-      deletedRoughValuationEntryIds: roughTombs,
-      deletedCashTxUids: cashTxTombs,
-      baseCash,
-      baseCashUpdatedAt,
-      holdings,
-      optionHoldings,
-      cash,
+      tradeRecords: finalTradeRecords,
+      tradePlans: finalTradePlans,
+      megaCapResearches: finalMegaCapResearches,
+      fundamentalEntries: finalFundamentalEntries,
+      roughValuationEntries: finalRoughValuationEntries,
+      journalEntries: finalJournalEntries,
+      snapshots: finalSnapshots,
+      dailyReturns: finalDailyReturns,
+      cashTransactions: finalCashTransactions,
+      deletedTradeUids: finalTombstones,
+      deletedSnapshotDates: finalSnapTombs,
+      deletedPlanIds: finalPlanTombs,
+      deletedMegaCapResearchIds: finalResearchTombs,
+      deletedFundamentalEntryIds: finalFundamentalTombs,
+      deletedRoughValuationEntryIds: finalRoughTombs,
+      deletedCashTxUids: finalCashTxTombs,
+      baseCash: finalBaseCash,
+      baseCashUpdatedAt: finalBaseCashUpdatedAt,
+      holdings: finalHoldings,
+      optionHoldings: finalOptionHoldings,
+      cash: finalCash,
     });
-    setItem("tradeRecords", tradeRecords);
-    setItem("tradePlans", tradePlans);
-    setItem("megaCapResearches", megaCapResearches);
-    setItem("fundamentalEntries", fundamentalEntries);
-    setItem("roughValuationEntries", roughValuationEntries);
-    setItem("journalEntries", journalEntries);
-    setItem("snapshots", snapshots);
-    setItem("dailyReturns", dailyReturns);
-    setItem("cashTransactions", cashTransactions);
-    setItem("deletedTradeUids", tombstones);
-    setItem("deletedSnapshotDates", snapTombs);
-    setItem("deletedPlanIds", planTombs);
-    setItem("deletedMegaCapResearchIds", researchTombs);
-    setItem("deletedFundamentalEntryIds", fundamentalTombs);
-    setItem("deletedRoughValuationEntryIds", roughTombs);
-    setItem("deletedCashTxUids", cashTxTombs);
-    setItem("baseCash", baseCash);
-    setItem("baseCashUpdatedAt", baseCashUpdatedAt);
+    setItem("tradeRecords", finalTradeRecords);
+    setItem("tradePlans", finalTradePlans);
+    setItem("megaCapResearches", finalMegaCapResearches);
+    setItem("fundamentalEntries", finalFundamentalEntries);
+    setItem("roughValuationEntries", finalRoughValuationEntries);
+    setItem("journalEntries", finalJournalEntries);
+    setItem("snapshots", finalSnapshots);
+    setItem("dailyReturns", finalDailyReturns);
+    setItem("cashTransactions", finalCashTransactions);
+    setItem("deletedTradeUids", finalTombstones);
+    setItem("deletedSnapshotDates", finalSnapTombs);
+    setItem("deletedPlanIds", finalPlanTombs);
+    setItem("deletedMegaCapResearchIds", finalResearchTombs);
+    setItem("deletedFundamentalEntryIds", finalFundamentalTombs);
+    setItem("deletedRoughValuationEntryIds", finalRoughTombs);
+    setItem("deletedCashTxUids", finalCashTxTombs);
+    setItem("baseCash", finalBaseCash);
+    setItem("baseCashUpdatedAt", finalBaseCashUpdatedAt);
   },
 }));
