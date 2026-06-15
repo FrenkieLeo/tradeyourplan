@@ -198,3 +198,13 @@ npx vercel --prod --yes  # 部署到 Vercel
 - API Key 硬编码在 `src/lib/jsonbin.ts:3`
 - 端点：`GET /v3/b/{id}/latest` | `PUT /v3/b/{id}`
 - 回复格式：`{ record: T, metadata: {...} }`
+
+---
+
+## Cursor Cloud specific instructions
+
+- 这是一个独立的 Next.js 应用，无需任何 secret 即可运行：JSONBin 与 Alpha Vantage 的密钥现已迁移到服务端路由 (`src/app/api/data/route.ts`、`src/app/api/av/route.ts`)，且都内置了硬编码 fallback。可选环境变量：`JSONBIN_BIN_ID`、`JSONBIN_API_KEY`、`ALPHAVANTAGE_API_KEY`。
+- 启动开发服务：`npm run dev`（Turbopack，端口 3000）。命令见 README / package.json。
+- `npm run lint` 当前在仓库现有代码上就有未修复的报错（约 8 errors + 警告），与你的改动无关；`npm run build` 可正常通过并完成 TypeScript 检查，可作为更可靠的验证手段。
+- UI 入口陷阱：交易录入弹窗（TradeModal）没有独立按钮，需点击顶部「持仓总收益」卡片才能打开。
+- 交易表单的「成交价格」输入框在窄视口下会被响应式 grid 折叠隐藏，需较宽窗口/全屏才能看到全部字段。
