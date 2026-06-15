@@ -35,7 +35,11 @@ export default function OptionEditModal({ option, open, onClose }: OptionEditMod
       setAvgPremium(String(option.averagePremium));
       setNowPremium(String(option.nowPremium));
     }
-  }, [open, option]);
+    // 仅在弹窗开关或切换到不同期权时重置本地表单；
+    // 不能依赖整个 option 引用：store 任何更新都会让 option 引用变化，
+    // 进而把用户正在输入的字段（如最新权利金）重置回 store 当前值，造成输入消失。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, option.id]);
 
   useEffect(() => {
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };

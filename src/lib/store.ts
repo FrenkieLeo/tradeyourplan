@@ -921,6 +921,28 @@ export const useStore = create<AppState>((set, get) => ({
     set({ optionHoldings });
     setItem("optionHoldings", optionHoldings);
     markPendingSync("optionHoldings", optionHoldings);
+
+    // 同步把最新权利金写入最新快照，避免 syncToJsonBin → deriveHoldings 用快照
+    // 旧的 nowPremium（如 B-S 自动估算值）覆盖刚改的最新权利金，导致输入框值被回滚。
+    const updatedOption = optionHoldings.find((o) => o.id === id);
+    if (updatedOption) {
+      const { snapshots } = get();
+      if (snapshots.length > 0) {
+        const idx = snapshots.length - 1;
+        const latest = { ...snapshots[idx] };
+        const oIdx = latest.optionHoldings.findIndex((o) => o.id === id);
+        if (oIdx >= 0) {
+          latest.optionHoldings = [...latest.optionHoldings];
+          latest.optionHoldings[oIdx] = optionWithPremium(latest.optionHoldings[oIdx], updatedOption.nowPremium);
+          const updatedSnap = recalcSnapshotDerived(latest);
+          const newSnapshots = [...snapshots];
+          newSnapshots[idx] = updatedSnap;
+          set({ snapshots: newSnapshots });
+          setItem("snapshots", newSnapshots);
+          markPendingSync("snapshots", newSnapshots);
+        }
+      }
+    }
   },
 
   updateCash: (total) => {
