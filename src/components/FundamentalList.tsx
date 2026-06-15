@@ -91,11 +91,18 @@ export default function FundamentalList() {
       arr.push(e);
       map.set(e.stockCode, arr);
     }
+    // 把只有毛估估、没有基本面行的股票（孤儿）也加进来，
+    // 以空数组占位，渲染时显示为"待补全基本面"行，确保毛估估数据可见可改。
+    for (const r of roughValuationEntries) {
+      if (!map.has(r.stockCode)) {
+        map.set(r.stockCode, []);
+      }
+    }
     return [...map.entries()].map(([stockCode, entries]) => ({
       stockCode,
       entries: entries.sort((a, b) => a.createdAt - b.createdAt),
     }));
-  }, [fundamentalEntries]);
+  }, [fundamentalEntries, roughValuationEntries]);
 
   const holdingPriceMap = useMemo(() => {
     const m: Record<string, number> = {};
@@ -200,6 +207,60 @@ export default function FundamentalList() {
               const fyLabels = group.entries[0] ? getFiscalYearLabels(group.entries[0].fiscalYearEndMonth) : { currentFY: "", nextFY: "" };
               const roughEntry = roughByCode.get(group.stockCode);
               const roughResult = roughEntry ? computeRoughValuation(roughEntry) : null;
+
+              // rough-only：只有毛估估、还没建过基本面行。渲染一个"待补全"占位行。
+              if (group.entries.length === 0) {
+                return [
+                  <tr
+                    key={`rough-only-${group.stockCode}`}
+                    className={`hover:bg-[var(--tv-bg-secondary)] ${gi > 0 ? "border-t-2 border-[var(--tv-border)]" : ""}`}
+                  >
+                    <td className="whitespace-nowrap px-3 py-2.5 text-sm font-medium">{group.stockCode}</td>
+                    <td
+                      className="cursor-pointer whitespace-nowrap px-3 py-2.5 text-right text-sm"
+                      onClick={(e) => { e.stopPropagation(); openRoughEditByCode(group.stockCode); }}
+                    >
+                      {roughResult && isFinite(roughResult.impliedGrowth) ? (
+                        <span className="text-[var(--tv-yellow)]">{(roughResult.impliedGrowth * 100).toFixed(2)}%</span>
+                      ) : <span className="text-[var(--tv-text-secondary)]">—</span>}
+                    </td>
+                    <td
+                      className="cursor-pointer whitespace-nowrap px-3 py-2.5 text-right text-sm"
+                      onClick={(e) => { e.stopPropagation(); openRoughEditByCode(group.stockCode); }}
+                    >
+                      {roughResult && isFinite(roughResult.fairPrice) ? (
+                        <span
+                          className={
+                            isFinite(roughResult.currentPrice) && roughResult.currentPrice > 0
+                              ? roughResult.fairPrice >= roughResult.currentPrice
+                                ? "text-[var(--tv-green)]"
+                                : "text-[var(--tv-red)]"
+                              : "text-[var(--tv-yellow)]"
+                          }
+                        >
+                          {roughResult.fairPrice.toFixed(2)}
+                        </span>
+                      ) : <span className="text-[var(--tv-text-secondary)]">—</span>}
+                    </td>
+                    <td
+                      colSpan={11}
+                      className="cursor-pointer px-3 py-2.5 text-xs text-[var(--tv-accent)]"
+                      onClick={() => openNew(group.stockCode)}
+                    >
+                      + 添加基本面（PE / EPS）
+                    </td>
+                    <td className="sticky right-0 whitespace-nowrap bg-[var(--tv-bg)] px-3 py-2.5 text-right text-sm font-medium">
+                      {price > 0 ? (
+                        <span className="text-[var(--tv-text-secondary)]">{price.toFixed(2)}</span>
+                      ) : (
+                        fetchingPrices.has(group.stockCode) ? (
+                          <span className="text-[var(--tv-text-secondary)]">...</span>
+                        ) : "—"
+                      )}
+                    </td>
+                  </tr>
+                ];
+              }
 
               return group.entries.map((entry, ei) => {
                 const currentValLow = entry.peLow * entry.currentFYEps;
