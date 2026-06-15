@@ -146,4 +146,23 @@ export interface FundamentalEntry {
   updatedAt: number;
 }
 
+// 段永平估估拆解法（毛估估）数据：按股票代码唯一。
+// 反推增速 g 和正向算合理价（用主观预期增速 g'）都在前端实时计算，不持久化。
+export interface RoughValuationEntry {
+  id: string;
+  stockCode: string;
+  marketCap: number;
+  equityInvestments: number;
+  cashAndShortTerm: number;
+  longTermDebt: number;
+  sharesOutstanding: number;
+  netIncome: number;
+  equityInvestmentIncome: number;
+  opportunityCost: number;
+  futurePE: number;
+  expectedGrowthRate: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 

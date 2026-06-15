@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { fetchQuote } from "@/lib/alphavantage";
-import type { FundamentalEntry } from "@/types";
+import type { FundamentalEntry, RoughValuationEntry } from "@/types";
 import FundamentalModal from "./FundamentalModal";
+import RoughValuationModal, { computeRoughValuation } from "./RoughValuationModal";
 
 function newId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -50,10 +51,38 @@ interface StockGroup {
 }
 
 export default function FundamentalList() {
-  const { fundamentalEntries, holdings, addFundamentalEntry } = useStore();
+  const { fundamentalEntries, roughValuationEntries, holdings, addFundamentalEntry } = useStore();
   const [editingEntry, setEditingEntry] = useState<FundamentalEntry | null>(null);
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
   const [fetchingPrices, setFetchingPrices] = useState<Set<string>>(new Set());
+
+  const [roughModalOpen, setRoughModalOpen] = useState(false);
+  const [editingRough, setEditingRough] = useState<RoughValuationEntry | null>(null);
+  const [roughDefaultCode, setRoughDefaultCode] = useState<string>("");
+
+  const roughByCode = useMemo(() => {
+    const m = new Map<string, RoughValuationEntry>();
+    for (const r of roughValuationEntries) m.set(r.stockCode, r);
+    return m;
+  }, [roughValuationEntries]);
+
+  const openRoughNew = (stockCode = "") => {
+    setEditingRough(null);
+    setRoughDefaultCode(stockCode);
+    setRoughModalOpen(true);
+  };
+
+  const openRoughEditByCode = (stockCode: string) => {
+    const existing = roughByCode.get(stockCode);
+    if (existing) {
+      setEditingRough(existing);
+      setRoughDefaultCode("");
+    } else {
+      setEditingRough(null);
+      setRoughDefaultCode(stockCode);
+    }
+    setRoughModalOpen(true);
+  };
 
   const groups = useMemo<StockGroup[]>(() => {
     const map = new Map<string, FundamentalEntry[]>();
@@ -121,19 +150,29 @@ export default function FundamentalList() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-base font-semibold">基本面跟踪清单</h2>
-        <button
-          onClick={() => openNew("")}
-          className="rounded bg-[var(--tv-accent)] px-4 py-1.5 text-sm font-medium text-white hover:opacity-80"
-        >
-          + 新增
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => openRoughNew("")}
+            className="rounded border border-[var(--tv-border)] px-4 py-1.5 text-sm font-medium text-[var(--tv-text)] hover:bg-[var(--tv-bg-secondary)]"
+          >
+            毛估估计算器
+          </button>
+          <button
+            onClick={() => openNew("")}
+            className="rounded bg-[var(--tv-accent)] px-4 py-1.5 text-sm font-medium text-white hover:opacity-80"
+          >
+            + 新增
+          </button>
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded border border-[var(--tv-border)]">
-        <table className="min-w-[1400px]">
+        <table className="min-w-[1500px]">
           <thead>
             <tr className="bg-[var(--tv-bg-secondary)]">
               <th className="whitespace-nowrap px-3 py-3 text-left text-xs">股票</th>
+              <th className="whitespace-nowrap px-3 py-3 text-right text-xs">毛估估增速</th>
+              <th className="whitespace-nowrap px-3 py-3 text-right text-xs">毛估估股价</th>
               <th className="whitespace-nowrap px-3 py-3 text-left text-xs">财年月</th>
               <th className="whitespace-nowrap px-3 py-3 text-right text-xs">PE 下限</th>
               <th className="whitespace-nowrap px-3 py-3 text-right text-xs">PE 上限</th>
@@ -151,7 +190,7 @@ export default function FundamentalList() {
           <tbody>
             {groups.length === 0 && (
               <tr>
-                <td colSpan={13} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
+                <td colSpan={15} className="py-8 text-center text-sm text-[var(--tv-text-secondary)]">
                   暂无基本面数据，点击右上角「+ 新增」创建
                 </td>
               </tr>
@@ -159,6 +198,8 @@ export default function FundamentalList() {
             {groups.map((group, gi) => {
               const price = getPrice(group.stockCode);
               const fyLabels = group.entries[0] ? getFiscalYearLabels(group.entries[0].fiscalYearEndMonth) : { currentFY: "", nextFY: "" };
+              const roughEntry = roughByCode.get(group.stockCode);
+              const roughResult = roughEntry ? computeRoughValuation(roughEntry) : null;
 
               return group.entries.map((entry, ei) => {
                 const currentValLow = entry.peLow * entry.currentFYEps;
@@ -177,6 +218,48 @@ export default function FundamentalList() {
                   >
                     <td className="whitespace-nowrap px-3 py-2.5 text-sm font-medium">
                       {isFirst ? group.stockCode : ""}
+                    </td>
+                    <td
+                      className="whitespace-nowrap px-3 py-2.5 text-right text-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isFirst) openRoughEditByCode(group.stockCode);
+                      }}
+                    >
+                      {isFirst ? (
+                        roughResult && isFinite(roughResult.impliedGrowth) ? (
+                          <span className="text-[var(--tv-yellow)]">{(roughResult.impliedGrowth * 100).toFixed(2)}%</span>
+                        ) : (
+                          <span className="text-[var(--tv-text-secondary)] hover:text-[var(--tv-accent)]">
+                            {roughEntry ? "—" : "+ 录入"}
+                          </span>
+                        )
+                      ) : ""}
+                    </td>
+                    <td
+                      className="whitespace-nowrap px-3 py-2.5 text-right text-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isFirst) openRoughEditByCode(group.stockCode);
+                      }}
+                    >
+                      {isFirst && roughResult ? (
+                        isFinite(roughResult.fairPrice) ? (
+                          <span
+                            className={
+                              isFinite(roughResult.currentPrice) && roughResult.currentPrice > 0
+                                ? roughResult.fairPrice >= roughResult.currentPrice
+                                  ? "text-[var(--tv-green)]"
+                                  : "text-[var(--tv-red)]"
+                                : "text-[var(--tv-yellow)]"
+                            }
+                          >
+                            {roughResult.fairPrice.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--tv-text-secondary)]">—</span>
+                        )
+                      ) : ""}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-sm text-[var(--tv-text-secondary)]">
                       {isFirst ? `${entry.fiscalYearEndMonth}月` : ""}
@@ -220,7 +303,7 @@ export default function FundamentalList() {
                   className="cursor-pointer hover:bg-[var(--tv-bg-secondary)]"
                   onClick={() => openNew(group.stockCode)}
                 >
-                  <td colSpan={13} className="px-3 py-1.5 text-xs text-[var(--tv-accent)]">
+                  <td colSpan={15} className="px-3 py-1.5 text-xs text-[var(--tv-accent)]">
                     + 为 {group.stockCode} 添加新行
                   </td>
                 </tr>
@@ -234,6 +317,17 @@ export default function FundamentalList() {
         open={!!editingEntry}
         onClose={() => setEditingEntry(null)}
         entry={editingEntry}
+      />
+
+      <RoughValuationModal
+        open={roughModalOpen}
+        onClose={() => {
+          setRoughModalOpen(false);
+          setEditingRough(null);
+          setRoughDefaultCode("");
+        }}
+        entry={editingRough}
+        defaultStockCode={roughDefaultCode}
       />
     </div>
   );
