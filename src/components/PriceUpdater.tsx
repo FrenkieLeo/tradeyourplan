@@ -12,7 +12,7 @@ import {
   applyTombstones,
   mergeUidList,
 } from "@/lib/store";
-import { getETDate, isAfterMarketClose, lastCompletedTradingDayET } from "@/lib/alphavantage";
+import { getETDate, isAfterMarketClose } from "@/lib/alphavantage";
 import { readData, createBin } from "@/lib/jsonbin";
 import { getItem, setItem, hasPendingSyncs } from "@/lib/db";
 import type {
@@ -31,7 +31,7 @@ import type {
 } from "@/types";
 
 export default function PriceUpdater() {
-  const { initialize, loaded, setRefreshing, fetchLatestQuotes, syncToJsonBin } = useStore();
+  const { initialize, setRefreshing, syncToJsonBin } = useStore();
   const initialized = useRef(false);
 
   // 单次初始化流程：远程与本地按 uid/日期合并（保留未同步的本地改动）→ 初始化 → 回推 → 自动拉价
@@ -214,34 +214,7 @@ export default function PriceUpdater() {
         console.error("[PriceUpdater] pending flush failed:", e);
       }
 
-      // 自动从 Alpha Vantage 拉取最新收盘价（已验证数据源准确）。
-      // 节流：每个「已收盘交易日」最多尝试一次，避免触碰免费档每日额度。
-      // 额外校验：若 lastQuoteSync 已标记但最新快照仍落后（旧版 bug 残留），强制重试。
-      try {
-        const expected = lastCompletedTradingDayET();
-        const lastSync = await getItem<string>("lastQuoteSync");
-        const latestSnapDate = useStore.getState().snapshots.at(-1)?.date;
-        const snapshotBehind = latestSnapDate != null && latestSnapDate < expected;
-        if (lastSync == null || lastSync < expected || snapshotBehind) {
-          console.log("[PriceUpdater] fetching latest quotes from Alpha Vantage", { expected, lastSync, latestSnapDate });
-          const ok = await fetchLatestQuotes();
-          const newLatest = useStore.getState().snapshots.at(-1)?.date;
-          if (ok && newLatest != null && newLatest >= expected) {
-            await setItem("lastQuoteSync", expected);
-            console.log("[PriceUpdater] quotes synced", { expected, newLatest });
-          } else {
-            console.warn("[PriceUpdater] fetchLatestQuotes incomplete, will retry next load", {
-              expected,
-              newLatest,
-              ok,
-            });
-          }
-        } else {
-          console.log("[PriceUpdater] quotes already up to date, skip fetch", { expected, lastSync });
-        }
-      } catch (e) {
-        console.error("[PriceUpdater] auto quote fetch failed:", e);
-      }
+      // 行情不再由免费 API 拉取；股价、期权报价和波动率统一由 IBKR 同步入口写入。
 
       setRefreshing(false);
     };
