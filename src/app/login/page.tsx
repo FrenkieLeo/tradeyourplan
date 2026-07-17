@@ -14,7 +14,10 @@ export default function LoginPage() {
     const supabase = createSupabaseBrowserClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        shouldCreateUser: false,
+      },
     });
     setMessage(error ? error.message : "登录链接已发送，请检查邮箱。链接使用后会回到工作台。");
     setBusy(false);
