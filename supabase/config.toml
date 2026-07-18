@@ -1,0 +1,26 @@
+project_id = "tradeyourplan"
+
+[storage.vector]
+enabled = false
+
+[auth]
+site_url = "https://planyourtrade-two.vercel.app"
+additional_redirect_urls = [
+  "https://planyourtrade-two.vercel.app/auth/callback",
+  "https://planyourtrade-m7jq99m67-frenkieleos-projects.vercel.app/auth/callback",
+  "http://localhost:3000/auth/callback",
+]
+enable_signup = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
